@@ -166,6 +166,7 @@ file.save(path)        # Save to disk
 The web module provides flexible ways to register routes:
 
 ### 1. Method-Specific Functions
+
 ```python
 srv.get("/users", list_users)
 srv.post("/users", create_user)
@@ -174,12 +175,14 @@ srv.delete("/users/{id}", delete_user)
 ```
 
 ### 2. Generic Route Method - Single HTTP Method
+
 ```python
 srv.route("GET", "/users", list_users)
 srv.route("POST", "/users", create_user)
 ```
 
 ### 3. Generic Route Method - Multiple HTTP Methods
+
 ```python
 # Same handler for multiple methods
 srv.route(["GET", "HEAD"], "/api/info", api_info)
