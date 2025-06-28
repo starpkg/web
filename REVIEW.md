@@ -1,4 +1,10 @@
-After reviewing the documentation, I have the following suggestions:
+You're a Go and Starlark expert, and helping to complete a Starlark module in Go named "web" for server-side web handling and hosting.
+
+The module should provide a simple and intuitive interface for handling web requests (supporting various http methods, common auth, sessions and cookies, etc.), serving static files, and hosting web applications. The module should be designed to be easy to use and integrate with existing Starlark code. You can refer to the Python Flask module for inspiration, but the implementation should be idiomatic Go and follow best practices, also with high performance. Your new `web` package is for server-side only, and client-side usage you should read the doc of `http` carefully, and both package should share the same spirit for API design and usages.
+
+Your colleague has written down a full plan in a markdown file named `PLAN.md` in the root directory of the repository, and it should include enough information for another developer to understand and implement the module.
+
+After reviewing this documentation, you have the following suggestions to improve the documentation:
 
 1. Functions need to be documented, including their purpose, parameters and return values, and any other relevant information.
 
@@ -26,4 +32,6 @@ After reviewing the documentation, I have the following suggestions:
 
 13. Since Starlark doesn't support `yield` keyword, the `Streaming Responses and Large Files` section is not applicable.
 
-14. For complicated example like `Complete Blog Application` and other examples, you should put them in seperate *.star files as attachment.
+14. For complicated example like `Complete Blog Application` and other examples, you should put them in separate *.star files as attachment.
+
+Please modify the `PLAN.md` file to follow these suggestions to make this plan more clear and complete.
