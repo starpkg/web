@@ -408,6 +408,33 @@ Priority order (highest to lowest):
 
 ## Middleware System Design
 
+### Design Philosophy & Inspiration
+
+The `web` module's middleware system draws inspiration from several proven web frameworks:
+
+#### **Primary Inspirations:**
+
+1. **Express.js (Node.js)** - The `(request, response, next)` pattern where middleware explicitly calls `next()` to continue the chain
+2. **Go's net/http** - Middleware as handler wrappers: `func(http.Handler) http.Handler`
+3. **Go frameworks (Gin, Echo)** - Middleware chains with context passing
+4. **Python Flask** - Request/response hooks, but with more explicit control flow
+
+#### **Why This Design?**
+
+**🎯 **Explicit Control Flow**: Unlike implicit hooks, middleware explicitly calls `next_handler()`, making the execution path clear and predictable.
+
+**🔗 **Composable Architecture**: Middleware can be stacked in any order, each adding a specific capability without knowing about others.
+
+**🛡️ **Request/Response Symmetry**: Pre-processing on the way in, post-processing on the way out - perfect for timing, logging, authentication, etc.
+
+**📦 **Context Passing**: Using `request.context` dict allows middleware to share data with downstream handlers without global state.
+
+**🎯 **Path-Specific Application**: Can apply middleware globally or to specific route patterns for fine-grained control.
+
+**⚡ **Early Termination**: Middleware can return responses directly (auth failures, rate limits) without continuing the chain.
+
+### Core Middleware Concepts
+
 The `web` module uses a flexible middleware system that allows you to intercept and modify requests and responses. Middleware functions form a chain where each middleware can:
 
 1. **Inspect/modify the request** before passing it to the next handler
@@ -752,6 +779,475 @@ srv.use(session_middleware(session_mgr))
 4. **Handle Errors**: Consider what happens if next_handler fails
 5. **Keep It Focused**: Each middleware should have a single responsibility
 6. **Performance**: Avoid heavy operations in frequently-used middleware
+
+## Built-in Preset Middleware
+
+The `web` module provides a comprehensive set of ready-to-use middleware for common web development needs:
+
+### Security Middleware
+
+#### 1. CORS Middleware
+
+```python
+load("web", "cors_middleware")
+
+# Simple CORS (allow all origins)
+srv.use(cors_middleware())
+
+# Configured CORS
+srv.use(cors_middleware(
+    origins=["https://example.com", "https://app.example.com"],
+    methods=["GET", "POST", "PUT", "DELETE"],
+    headers=["Content-Type", "Authorization"],
+    credentials=True,
+    max_age=86400
+))
+```
+
+#### 2. Security Headers Middleware
+
+```python
+load("web", "security_headers_middleware")
+
+srv.use(security_headers_middleware(
+    frame_options="DENY",                    # X-Frame-Options
+    content_type_options="nosniff",          # X-Content-Type-Options
+    xss_protection="1; mode=block",          # X-XSS-Protection
+    hsts="max-age=31536000; includeSubDomains",  # Strict-Transport-Security
+    csp="default-src 'self'",                # Content-Security-Policy
+    referrer_policy="strict-origin-when-cross-origin"
+))
+```
+
+#### 3. Rate Limiting Middleware
+
+```python
+load("web", "rate_limit_middleware")
+
+# Simple rate limiting (100 requests per minute per IP)
+srv.use(rate_limit_middleware(
+    requests=100,
+    window=60,
+    key_func=lambda req: req.client_ip
+))
+
+# Advanced rate limiting with custom storage
+srv.use(rate_limit_middleware(
+    requests=1000,
+    window=3600,
+    key_func=lambda req: req.get_header("X-API-Key", req.client_ip),
+    storage=redis_storage,  # Custom storage backend
+    skip_func=lambda req: req.path.startswith("/health")
+))
+```
+
+#### 4. Request Size Middleware
+
+```python
+load("web", "request_size_middleware")
+
+srv.use(request_size_middleware(
+    max_content_length=50 * 1024 * 1024,  # 50MB limit
+    max_url_length=2048,                   # URL length limit
+    max_headers=100                        # Header count limit
+))
+```
+
+### Performance Middleware
+
+#### 5. Compression Middleware
+
+```python
+load("web", "compression_middleware")
+
+srv.use(compression_middleware(
+    level=6,                          # Compression level (1-9)
+    min_size=1024,                    # Only compress responses > 1KB
+    types=["text/html", "text/css", "application/javascript", "application/json"]
+))
+```
+
+#### 6. Caching Middleware
+
+```python
+load("web", "cache_middleware")
+
+# Static file caching
+srv.use(cache_middleware(
+    max_age=3600,                     # 1 hour cache
+    private=False,                    # Public cache
+    patterns=["/static/*", "/assets/*"]
+))
+
+# API response caching
+srv.use(cache_middleware(
+    max_age=300,                      # 5 minutes
+    vary=["Authorization"],           # Vary by auth header
+    patterns=["/api/public/*"]
+))
+```
+
+#### 7. Request Timeout Middleware
+
+```python
+load("web", "timeout_middleware")
+
+srv.use(timeout_middleware(
+    timeout=30,                       # 30 second timeout
+    message="Request timeout"
+))
+```
+
+### Observability Middleware
+
+#### 8. Logging Middleware
+
+```python
+load("web", "logging_middleware")
+
+# Basic request logging
+srv.use(logging_middleware())
+
+# Detailed logging with custom format
+srv.use(logging_middleware(
+    format='"{method} {path} {status} {duration}ms {size}bytes"',
+    include_headers=["User-Agent", "X-Forwarded-For"],
+    skip_paths=["/health", "/metrics"]
+))
+```
+
+#### 9. Metrics Middleware
+
+```python
+load("web", "metrics_middleware")
+
+srv.use(metrics_middleware(
+    track_requests=True,
+    track_duration=True,
+    track_status_codes=True,
+    track_routes=True,
+    prometheus_format=True
+))
+
+# Access metrics endpoint
+srv.get("/metrics", metrics_endpoint)
+```
+
+#### 10. Request ID Middleware
+
+```python
+load("web", "request_id_middleware")
+
+srv.use(request_id_middleware(
+    header="X-Request-ID",
+    generator=lambda: generate_uuid4()  # Custom ID generator
+))
+```
+
+#### 11. Request Timing Middleware
+
+```python
+load("web", "timing_middleware")
+
+srv.use(timing_middleware(
+    header="X-Response-Time",         # Header name for timing
+    precision=3                       # Decimal places
+))
+```
+
+### Development Middleware
+
+#### 12. Error Handling Middleware
+
+```python
+load("web", "error_middleware")
+
+srv.use(error_middleware(
+    debug=True,                       # Show stack traces in development
+    log_errors=True,                  # Log all errors
+    custom_handlers={
+        404: lambda req: json_response({"error": "Not found"}, status=404),
+        500: lambda req: json_response({"error": "Server error"}, status=500)
+    }
+))
+```
+
+#### 13. Debug Middleware
+
+```python
+load("web", "debug_middleware")
+
+# Only in development
+if runtime.getenv("ENV") == "development":
+    srv.use(debug_middleware(
+        show_request_info=True,       # Log request details
+        show_response_info=True,      # Log response details
+        measure_memory=True,          # Track memory usage
+        profile_routes=True           # Performance profiling
+    ))
+```
+
+### Content Processing Middleware
+
+#### 14. JSON Parser Middleware
+
+```python
+load("web", "json_middleware")
+
+srv.use(json_middleware(
+    strict=True,                      # Strict JSON parsing
+    max_size=10 * 1024 * 1024,       # 10MB JSON limit
+    error_handler=lambda req, err: error_response(400, "Invalid JSON")
+))
+```
+
+#### 15. Form Parser Middleware
+
+```python
+load("web", "form_middleware")
+
+srv.use(form_middleware(
+    max_size=50 * 1024 * 1024,       # 50MB form limit
+    max_files=10,                     # Max uploaded files
+    allowed_types=["image/jpeg", "image/png", "application/pdf"]
+))
+```
+
+### Authentication & Authorization Middleware
+
+#### 16. JWT Middleware
+
+```python
+load("web", "jwt_middleware")
+
+srv.use_for("/api/*", jwt_middleware(
+    secret="your-jwt-secret",
+    algorithm="HS256",
+    required_claims=["sub", "exp"],
+    audience="your-api",
+    issuer="your-service"
+))
+```
+
+#### 17. API Key Middleware
+
+```python
+load("web", "api_key_middleware")
+
+srv.use_for("/api/*", api_key_middleware(
+    header="X-API-Key",
+    query_param="api_key",
+    validator=lambda key: validate_api_key(key),
+    required_scopes=["read", "write"]
+))
+```
+
+#### 18. Session Middleware
+
+```python
+load("web", "session_middleware")
+
+session_mgr = create_session_manager(secret="session-secret")
+srv.use(session_middleware(
+    session_manager=session_mgr,
+    cookie_name="session",
+    max_age=86400,
+    secure=True,
+    http_only=True
+))
+```
+
+### Utility Middleware
+
+#### 19. Redirect Middleware
+
+```python
+load("web", "redirect_middleware")
+
+# Redirect HTTP to HTTPS
+srv.use(redirect_middleware(
+    redirects={
+        "http://example.com": "https://example.com",
+        "/old-path": "/new-path"
+    },
+    status=301
+))
+```
+
+#### 20. Maintenance Middleware
+
+```python
+load("web", "maintenance_middleware")
+
+srv.use(maintenance_middleware(
+    enabled=lambda: check_maintenance_mode(),
+    message="Service temporarily unavailable",
+    retry_after=3600,
+    bypass_paths=["/health", "/admin/maintenance"]
+))
+```
+
+### Usage Patterns
+
+#### Recommended Middleware Stack
+
+```python
+def main():
+    srv = create_server(port=8080)
+    
+    # 1. Request processing & security (early)
+    srv.use(request_id_middleware())
+    srv.use(security_headers_middleware())
+    srv.use(rate_limit_middleware(requests=1000, window=3600))
+    srv.use(request_size_middleware(max_content_length=10*1024*1024))
+    
+    # 2. Observability
+    srv.use(logging_middleware())
+    srv.use(timing_middleware())
+    srv.use(metrics_middleware())
+    
+    # 3. Content processing
+    srv.use(compression_middleware())
+    srv.use(json_middleware())
+    srv.use(form_middleware())
+    
+    # 4. CORS (after content processing)
+    srv.use(cors_middleware(origins=["https://app.example.com"]))
+    
+    # 5. Authentication (path-specific)
+    srv.use_for("/api/*", jwt_middleware(secret="jwt-secret"))
+    srv.use_for("/admin/*", session_middleware(session_mgr))
+    
+    # 6. Error handling (last)
+    srv.use(error_middleware(debug=False))
+    
+    # Routes
+    srv.get("/api/data", api_handler)
+    srv.run()
+```
+
+#### Development vs Production
+
+```python
+def setup_middleware(srv, env="production"):
+    # Always enabled
+    srv.use(request_id_middleware())
+    srv.use(logging_middleware())
+    srv.use(security_headers_middleware())
+    
+    if env == "development":
+        srv.use(debug_middleware())
+        srv.use(error_middleware(debug=True))
+        srv.use(cors_middleware())  # Permissive CORS
+    else:
+        srv.use(rate_limit_middleware(requests=100, window=60))
+        srv.use(compression_middleware())
+        srv.use(error_middleware(debug=False))
+        srv.use(cors_middleware(origins=["https://yourdomain.com"]))
+```
+
+### Custom Middleware Factory Pattern
+
+```python
+def create_auth_middleware(auth_service):
+    """Factory function for creating authentication middleware."""
+    
+    def auth_middleware(request, next_handler):
+        token = request.bearer_token()
+        if not token:
+            return error_response(401, "Authentication required")
+        
+        user = auth_service.validate_token(token)
+        if not user:
+            return error_response(401, "Invalid token")
+        
+        request.context["user"] = user
+        return next_handler(request)
+    
+    return auth_middleware
+
+# Usage
+auth_service = AuthService(database=db)
+srv.use_for("/api/*", create_auth_middleware(auth_service))
+```
+
+### Framework Inspiration Comparison
+
+| Framework | Inspiration Taken | How We Adapted |
+|-----------|------------------|----------------|
+| **Express.js** | `(req, res, next)` pattern | `(request, next_handler) -> response` |
+| **Go net/http** | Handler wrapping concept | Middleware chain execution |
+| **Gin/Echo** | Context passing, path-specific middleware | `request.context` dict, `use_for()` |
+| **Flask** | Before/after request hooks | More explicit control with `next_handler()` |
+| **Django** | Middleware classes | Functional approach for Starlark |
+| **Fastify** | Performance focus | Minimal overhead design |
+
+### Middleware Development Guidelines
+
+#### Creating Custom Middleware
+
+```python
+def create_custom_middleware(config):
+    """Template for creating reusable middleware."""
+    
+    def middleware(request, next_handler):
+        # 1. Pre-processing (request validation, modification)
+        if not validate_request(request, config):
+            return error_response(400, "Invalid request")
+        
+        # 2. Add data to context for downstream handlers
+        request.context["custom_data"] = process_request(request)
+        
+        # 3. Call next handler
+        response = next_handler(request)
+        
+        # 4. Post-processing (response modification, logging)
+        response = modify_response(response, config)
+        
+        return response
+    
+    return middleware
+
+# Usage
+srv.use(create_custom_middleware({"option": "value"}))
+```
+
+#### Middleware Categories & Order
+
+```python
+# Recommended order for maximum compatibility:
+
+# 1. INFRASTRUCTURE (request setup)
+srv.use(request_id_middleware())
+srv.use(request_size_middleware())
+
+# 2. SECURITY (early filtering)  
+srv.use(security_headers_middleware())
+srv.use(rate_limit_middleware())
+
+# 3. OBSERVABILITY (logging/monitoring)
+srv.use(logging_middleware())
+srv.use(timing_middleware())
+srv.use(metrics_middleware())
+
+# 4. CONTENT PROCESSING (parsing)
+srv.use(compression_middleware())
+srv.use(json_middleware())
+srv.use(form_middleware())
+
+# 5. CROSS-ORIGIN (after content processing)
+srv.use(cors_middleware())
+
+# 6. AUTHENTICATION (path-specific)
+srv.use_for("/api/*", jwt_middleware())
+srv.use_for("/admin/*", session_middleware())
+
+# 7. BUSINESS LOGIC (routes)
+# Your route handlers here
+
+# 8. ERROR HANDLING (catch-all)
+srv.use(error_middleware())
+```
 
 ## Usage Examples
 
