@@ -207,12 +207,7 @@ def middleware(request, next_handler) -> Response:
     """
     Middleware function interface.
     
-    Args:
-        request: Request object
-        next_handler: Function to call next middleware/handler
-    
-    Returns:
-        Response object (can modify response from next_handler)
+    See "Middleware System Design" section for detailed documentation and examples.
     """
 ```
 
@@ -410,6 +405,353 @@ Priority order (highest to lowest):
 1. **Exact match**: `/users`
 2. **Named parameters**: `/users/{id}`
 3. **Wildcard**: `/files/*filepath`
+
+## Middleware System Design
+
+The `web` module uses a flexible middleware system that allows you to intercept and modify requests and responses. Middleware functions form a chain where each middleware can:
+
+1. **Inspect/modify the request** before passing it to the next handler
+2. **Call the next handler** in the chain (or skip it)
+3. **Inspect/modify the response** before returning it
+
+### Middleware Function Interface
+
+```python
+def middleware_function(request, next_handler):
+    """
+    Middleware function interface.
+    
+    Args:
+        request: The incoming HTTP request object
+        next_handler: Function to call the next middleware or final route handler
+    
+    Returns:
+        Response object (can be modified response from next_handler or completely new response)
+    """
+    # Pre-processing: modify request, check conditions, etc.
+    
+    # Call next handler in chain (route handler or next middleware)
+    response = next_handler(request)
+    
+    # Post-processing: modify response, log, etc.
+    
+    return response
+```
+
+### Middleware Registration
+
+```python
+# Global middleware (applies to all routes)
+server.use(middleware_function)
+
+# Path-specific middleware (applies only to matching paths)
+server.use_for("/api/*", auth_middleware)
+server.use_for("/admin/*", admin_auth_middleware)
+```
+
+### Execution Order
+
+Middleware executes in **registration order** for the request phase, and **reverse order** for the response phase:
+
+```python
+srv.use(middleware_1)  # Registered first
+srv.use(middleware_2)  # Registered second
+srv.use(middleware_3)  # Registered third
+
+# Execution flow:
+# Request: middleware_1 -> middleware_2 -> middleware_3 -> route_handler
+# Response: route_handler -> middleware_3 -> middleware_2 -> middleware_1
+```
+
+### Middleware Patterns
+
+#### 1. Request Inspection/Modification
+
+```python
+def logging_middleware(request, next_handler):
+    """Log all incoming requests."""
+    print("Request: {} {}".format(request.method, request.path))
+    
+    # Continue to next handler
+    response = next_handler(request)
+    
+    print("Response: {}".format(response.status_code))
+    return response
+
+srv.use(logging_middleware)
+```
+
+#### 2. Response Modification
+
+```python
+def cors_middleware(request, next_handler):
+    """Add CORS headers to all responses."""
+    
+    # Handle preflight requests
+    if request.method == "OPTIONS":
+        return response("", headers={
+            "Access-Control-Allow-Origin": "*",
+            "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
+            "Access-Control-Allow-Headers": "Content-Type, Authorization"
+        })
+    
+    # Process normal requests
+    resp = next_handler(request)
+    
+    # Add CORS headers to response
+    resp.headers["Access-Control-Allow-Origin"] = "*"
+    resp.headers["Access-Control-Allow-Credentials"] = "true"
+    
+    return resp
+
+srv.use(cors_middleware)
+```
+
+#### 3. Request Timing
+
+```python
+load("time")
+
+def timing_middleware(request, next_handler):
+    """Measure request processing time."""
+    start_time = time.now()
+    
+    # Process request
+    response = next_handler(request)
+    
+    # Calculate duration
+    duration = time.since(start_time)
+    response.headers["X-Response-Time"] = "{:.3f}ms".format(duration.milliseconds)
+    
+    return response
+
+srv.use(timing_middleware)
+```
+
+#### 4. Authentication Middleware
+
+```python
+def auth_middleware(request, next_handler):
+    """Require authentication for protected routes."""
+    
+    # Check for authorization header
+    auth_header = request.get_header("Authorization")
+    if auth_header == None:
+        return error_response(401, "Authorization header required")
+    
+    # Validate token (simplified)
+    if not auth_header.startswith("Bearer "):
+        return error_response(401, "Invalid authorization format")
+    
+    token = auth_header[7:]  # Remove "Bearer " prefix
+    user_info = validate_token(token)  # Your validation function
+    
+    if user_info == None:
+        return error_response(401, "Invalid token")
+    
+    # Add user info to request context for route handlers
+    request.context["user"] = user_info
+    
+    # Continue to next handler
+    return next_handler(request)
+
+# Apply only to API routes
+srv.use_for("/api/*", auth_middleware)
+```
+
+#### 5. Early Return (Skip Route Handler)
+
+```python
+def maintenance_middleware(request, next_handler):
+    """Return maintenance message during downtime."""
+    
+    # Check if in maintenance mode
+    if is_maintenance_mode():
+        return response(
+            "Service temporarily unavailable",
+            status=503,
+            headers={"Retry-After": "3600"}
+        )
+    
+    # Normal processing
+    return next_handler(request)
+
+srv.use(maintenance_middleware)
+```
+
+#### 6. Request Body Processing
+
+```python
+def json_parser_middleware(request, next_handler):
+    """Pre-parse JSON for all POST/PUT requests."""
+    
+    if request.method in ["POST", "PUT"] and request.get_header("Content-Type") == "application/json":
+        try:
+            # Parse JSON and store in context
+            json_data = request.json()
+            if json_data != None:
+                request.context["json"] = json_data
+            else:
+                return error_response(400, "Invalid JSON")
+        except:
+            return error_response(400, "Malformed JSON")
+    
+    return next_handler(request)
+
+srv.use(json_parser_middleware)
+```
+
+#### 7. Rate Limiting
+
+```python
+def rate_limit_middleware(request, next_handler):
+    """Simple rate limiting by IP address."""
+    
+    client_ip = request.client_ip
+    current_time = time.now().unix
+    
+    # Get request count for this IP (simplified - use proper storage in production)
+    request_count = get_request_count(client_ip, current_time)
+    
+    if request_count > 100:  # 100 requests per minute
+        return error_response(429, "Rate limit exceeded")
+    
+    # Increment counter
+    increment_request_count(client_ip, current_time)
+    
+    return next_handler(request)
+
+srv.use_for("/api/*", rate_limit_middleware)
+```
+
+### Path-Specific Middleware
+
+You can apply middleware only to specific path patterns:
+
+```python
+# Authentication only for admin routes
+srv.use_for("/admin/*", admin_auth_middleware)
+
+# Rate limiting only for API
+srv.use_for("/api/*", rate_limit_middleware)
+
+# Special handling for webhooks
+srv.use_for("/webhooks/*", webhook_validation_middleware)
+
+# Multiple middlewares for the same path
+srv.use_for("/api/v1/*", api_v1_middleware)
+srv.use_for("/api/v1/*", api_v1_auth_middleware)
+```
+
+### Middleware Execution Example
+
+```python
+def main():
+    srv = create_server(port=8080)
+    
+    # Global middleware (applies to all routes)
+    srv.use(logging_middleware)     # 1st: logs request
+    srv.use(timing_middleware)      # 2nd: measures time
+    srv.use(cors_middleware)        # 3rd: adds CORS headers
+    
+    # Path-specific middleware
+    srv.use_for("/api/*", auth_middleware)  # Only for /api/* routes
+    
+    def api_handler(request):
+        # request.context["user"] is available here (set by auth_middleware)
+        user = request.context.get("user")
+        return json_response({"message": "Hello {}".format(user["name"])})
+    
+    srv.get("/api/data", api_handler)
+    srv.run()
+
+# Execution flow for GET /api/data:
+# 1. logging_middleware (logs request)
+# 2. timing_middleware (starts timer)
+# 3. cors_middleware (handles CORS)
+# 4. auth_middleware (validates auth, sets user context)
+# 5. api_handler (actual route handler)
+# 6. auth_middleware (response phase - usually just passes through)
+# 7. cors_middleware (adds CORS headers to response)
+# 8. timing_middleware (adds timing header)
+# 9. logging_middleware (logs response)
+```
+
+### Advanced Middleware Patterns
+
+#### Conditional Middleware
+
+```python
+def conditional_middleware(request, next_handler):
+    """Apply different logic based on request properties."""
+    
+    if request.path.startswith("/api/"):
+        # API-specific processing
+        if request.get_header("Content-Type") != "application/json":
+            return error_response(400, "API requires JSON")
+    
+    response = next_handler(request)
+    
+    if request.path.startswith("/api/"):
+        # Ensure API responses are JSON
+        if "Content-Type" not in response.headers:
+            response.headers["Content-Type"] = "application/json"
+    
+    return response
+```
+
+#### Error Handling Middleware
+
+```python
+def error_handling_middleware(request, next_handler):
+    """Catch and handle errors from downstream handlers."""
+    
+    try:
+        return next_handler(request)
+    except Exception as e:
+        # Log error
+        print("Error processing request: {}".format(str(e)))
+        
+        # Return user-friendly error
+        return error_response(500, "Internal server error")
+```
+
+#### Session Middleware
+
+```python
+def session_middleware(session_manager):
+    """Create middleware that provides session access."""
+    
+    def middleware(request, next_handler):
+        # Get session for this request
+        session = session_manager.get_session(request)
+        
+        # Make session available in request context
+        request.context["session"] = session
+        
+        # Process request
+        response = next_handler(request)
+        
+        # Save session changes
+        session.save()
+        
+        return response
+    
+    return middleware
+
+# Usage
+session_mgr = create_session_manager(secret="my-secret")
+srv.use(session_middleware(session_mgr))
+```
+
+### Middleware Best Practices
+
+1. **Order Matters**: Register middleware in logical order (auth before business logic)
+2. **Always Call Next**: Unless intentionally stopping the chain
+3. **Use Context**: Store data in `request.context` for downstream handlers
+4. **Handle Errors**: Consider what happens if next_handler fails
+5. **Keep It Focused**: Each middleware should have a single responsibility
+6. **Performance**: Avoid heavy operations in frequently-used middleware
 
 ## Usage Examples
 

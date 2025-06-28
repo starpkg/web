@@ -2,7 +2,7 @@
 # This example demonstrates various middleware functions including
 # timing, logging, CORS, and authentication middleware.
 
-load("web", "create_server", "response", "json_response", "create_session_manager")
+load("web", "create_server", "response", "json_response", "error_response", "create_session_manager")
 load("time")
 
 def main():
