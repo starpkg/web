@@ -406,34 +406,7 @@ Priority order (highest to lowest):
 2. **Named parameters**: `/users/{id}`
 3. **Wildcard**: `/files/*filepath`
 
-## Middleware System Design
-
-### Design Philosophy & Inspiration
-
-The `web` module's middleware system draws inspiration from several proven web frameworks:
-
-#### **Primary Inspirations:**
-
-1. **Express.js (Node.js)** - The `(request, response, next)` pattern where middleware explicitly calls `next()` to continue the chain
-2. **Go's net/http** - Middleware as handler wrappers: `func(http.Handler) http.Handler`
-3. **Go frameworks (Gin, Echo)** - Middleware chains with context passing
-4. **Python Flask** - Request/response hooks, but with more explicit control flow
-
-#### **Why This Design?**
-
-**🎯 **Explicit Control Flow**: Unlike implicit hooks, middleware explicitly calls `next_handler()`, making the execution path clear and predictable.
-
-**🔗 **Composable Architecture**: Middleware can be stacked in any order, each adding a specific capability without knowing about others.
-
-**🛡️ **Request/Response Symmetry**: Pre-processing on the way in, post-processing on the way out - perfect for timing, logging, authentication, etc.
-
-**📦 **Context Passing**: Using `request.context` dict allows middleware to share data with downstream handlers without global state.
-
-**🎯 **Path-Specific Application**: Can apply middleware globally or to specific route patterns for fine-grained control.
-
-**⚡ **Early Termination**: Middleware can return responses directly (auth failures, rate limits) without continuing the chain.
-
-### Core Middleware Concepts
+## Middleware System
 
 The `web` module uses a flexible middleware system that allows you to intercept and modify requests and responses. Middleware functions form a chain where each middleware can:
 
@@ -1170,17 +1143,6 @@ def create_auth_middleware(auth_service):
 auth_service = AuthService(database=db)
 srv.use_for("/api/*", create_auth_middleware(auth_service))
 ```
-
-### Framework Inspiration Comparison
-
-| Framework | Inspiration Taken | How We Adapted |
-|-----------|------------------|----------------|
-| **Express.js** | `(req, res, next)` pattern | `(request, next_handler) -> response` |
-| **Go net/http** | Handler wrapping concept | Middleware chain execution |
-| **Gin/Echo** | Context passing, path-specific middleware | `request.context` dict, `use_for()` |
-| **Flask** | Before/after request hooks | More explicit control with `next_handler()` |
-| **Django** | Middleware classes | Functional approach for Starlark |
-| **Fastify** | Performance focus | Minimal overhead design |
 
 ### Middleware Development Guidelines
 
