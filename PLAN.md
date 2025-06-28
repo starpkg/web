@@ -29,33 +29,224 @@ The `web` module provides a high-performance, Flask-inspired web server framewor
 - ❌ **No `is`/`is not`**: Use `== None` and `!= None`
 - ❌ **No while loops**: Use for loops with range or recursion
 - ❌ **Limited global scope**: Variables in outer scope can be read but not reassigned without special handling
+- ❌ **No yield**: Streaming responses not supported
 
-## API Design
+## Function Documentation
 
 ### Core Module Functions
 
+#### Server Creation
+
 ```python
-# Server creation
-server(host="localhost", port=8080, **config) -> Server
-
-# Response builders
-response(body, status=200, headers={}) -> Response
-json_response(data, status=200, headers={}) -> Response  
-html_response(content, status=200, headers={}) -> Response
-redirect(location, status=302) -> Response
-error_response(status, message="") -> Response
-
-# Static file helpers
-send_file(filepath, content_type=None) -> Response
-
-# Authentication helpers
-basic_auth(users={}, realm="Restricted") -> Authenticator
-bearer_auth(validate_func) -> Authenticator
-api_key_auth(keys=[], header="X-API-Key") -> Authenticator
-
-# Session helpers
-get_session() -> Session  # Get current request session
+create_server(host="localhost", port=8080, **config) -> Server
 ```
+
+**Purpose**: Creates a new HTTP server instance with the specified configuration.  
+**Parameters**:
+
+- `host` (string): Host address to bind to (default: "localhost")
+- `port` (int): Port number to listen on (default: 8080)
+- `**config`: Additional configuration options (see Configuration section)  
+**Returns**: Server object that can be used to register routes and start the server
+
+#### Session Management
+
+```python
+create_session_manager(secret, cookie_name="session", max_age=86400, **options) -> SessionManager
+```
+
+**Purpose**: Creates a session manager for handling user sessions across requests.  
+**Parameters**:
+
+- `secret` (string): Secret key for session encryption (required)
+- `cookie_name` (string): Name of the session cookie (default: "session")
+- `max_age` (int): Session lifetime in seconds (default: 86400/24 hours)
+- `**options`: Additional session configuration  
+**Returns**: SessionManager object for handling sessions
+
+#### Response Builders
+
+```python
+response(body, status=200, headers={}) -> Response
+```
+
+**Purpose**: Creates a basic HTTP response with the given body and status.  
+**Parameters**:
+
+- `body` (string): Response body content
+- `status` (int): HTTP status code (default: 200)
+- `headers` (dict): Additional response headers  
+**Returns**: Response object
+
+```python
+json_response(data, status=200, headers={}) -> Response
+```
+
+**Purpose**: Creates a JSON HTTP response from the given data.  
+**Parameters**:
+
+- `data` (any): Data to serialize as JSON
+- `status` (int): HTTP status code (default: 200)
+- `headers` (dict): Additional response headers  
+**Returns**: Response object with Content-Type: application/json
+
+```python
+html_response(content, status=200, headers={}) -> Response
+```
+
+**Purpose**: Creates an HTML HTTP response with proper content type.  
+**Parameters**:
+
+- `content` (string): HTML content
+- `status` (int): HTTP status code (default: 200)
+- `headers` (dict): Additional response headers  
+**Returns**: Response object with Content-Type: text/html
+
+```python
+redirect(location, status=302) -> Response
+```
+
+**Purpose**: Creates a redirect response to the specified location.  
+**Parameters**:
+
+- `location` (string): URL to redirect to
+- `status` (int): Redirect status code (default: 302)  
+**Returns**: Response object with Location header
+
+```python
+error_response(status, message="") -> Response
+```
+
+**Purpose**: Creates an error response with the given status and message.  
+**Parameters**:
+
+- `status` (int): HTTP error status code
+- `message` (string): Error message (optional)  
+**Returns**: Response object with error status
+
+#### File Helpers
+
+```python
+send_file(filepath, content_type=None) -> Response
+```
+
+**Purpose**: Sends a file from the filesystem as a response.  
+**Parameters**:
+
+- `filepath` (string): Path to the file to send
+- `content_type` (string): MIME type (auto-detected if None)  
+**Returns**: Response object with file content
+
+```python
+send_data(data, filename, content_type="application/octet-stream") -> Response
+```
+
+**Purpose**: Sends raw data as a file download response.  
+**Parameters**:
+
+- `data` (string or bytes): Data to send
+- `filename` (string): Suggested filename for download
+- `content_type` (string): MIME type (default: "application/octet-stream")  
+**Returns**: Response object with attachment headers
+
+#### Authentication Helpers
+
+```python
+basic_auth(users={}, realm="Restricted") -> Authenticator
+```
+
+**Purpose**: Creates a basic HTTP authentication handler.  
+**Parameters**:
+
+- `users` (dict): Username -> password mapping
+- `realm` (string): Authentication realm name  
+**Returns**: Authenticator object with validation methods
+
+```python
+bearer_auth(validate_func) -> Authenticator
+```
+
+**Purpose**: Creates a bearer token authentication handler.  
+**Parameters**:
+
+- `validate_func` (function): Function to validate tokens, returns user info or None  
+**Returns**: Authenticator object with validation methods
+
+```python
+api_key_auth(keys=[], header="X-API-Key") -> Authenticator
+```
+
+**Purpose**: Creates an API key authentication handler.  
+**Parameters**:
+
+- `keys` (list): List of valid API keys
+- `header` (string): Header name for API key (default: "X-API-Key")  
+**Returns**: Authenticator object with validation methods
+
+## Handler Function Interfaces
+
+### Request Handler Interface
+
+```python
+def handler(request) -> Response:
+    """
+    Standard request handler interface.
+    
+    Args:
+        request: Request object containing all request information
+    
+    Returns:
+        Response object with status, headers, and body
+    """
+```
+
+### Middleware Interface
+
+```python
+def middleware(request, next_handler) -> Response:
+    """
+    Middleware function interface.
+    
+    Args:
+        request: Request object
+        next_handler: Function to call next middleware/handler
+    
+    Returns:
+        Response object (can modify response from next_handler)
+    """
+```
+
+### Error Handler Interface
+
+```python
+def error_handler(request) -> Response:
+    """
+    Error handler interface for specific status codes.
+    
+    Args:
+        request: Request object that caused the error
+    
+    Returns:
+        Response object for the error
+    """
+```
+
+### Authentication Validator Interface
+
+```python
+def token_validator(token) -> dict or None:
+    """
+    Token validation function interface for bearer_auth.
+    
+    Args:
+        token: Bearer token string
+    
+    Returns:
+        User info dict if valid, None if invalid
+    """
+```
+
+## Object APIs
 
 ### Server Object API
 
@@ -77,12 +268,12 @@ server.group(prefix) -> RouteGroup
 server.static(url_path, directory, index="index.html")
 server.spa(url_path, directory, fallback="index.html")
 
-# Middleware
-server.use(middleware_func)
-server.use_for(path_pattern, middleware_func)
-server.before_request(func)
-server.after_request(func)
-server.error_handler(status_code, handler)
+# Middleware (redesigned for flexibility)
+server.use(middleware_func)                             # Global middleware
+server.use_for(path_pattern, middleware_func)           # Path-specific middleware
+
+# Error handling
+server.error_handler(status_codes, handler)             # status_codes can be int or list of ints
 
 # Lifecycle
 server.run()              # Blocking
@@ -91,7 +282,7 @@ server.stop()
 server.is_running() -> bool
 ```
 
-### Request Object (Global during request handling)
+### Request Object (Available in handlers)
 
 ```python
 # Properties (matching http module's ExportedServerRequest structure)
@@ -100,9 +291,11 @@ request.url             # Full URL
 request.path            # URL path
 request.host            # Host header
 request.remote          # Client address
+request.client_ip       # Client IP address (extracted from headers/connection)
 request.proto           # Protocol (HTTP/1.1)
 request.headers         # Dict of headers
 request.query           # Dict of query parameters
+request.context         # Dict for storing middleware data
 
 # Methods
 request.body()          # Raw body string
@@ -114,6 +307,31 @@ request.param(name)     # Get path parameter
 request.get_header(name, default=None)
 request.bearer_token()  # Extract Bearer token
 request.basic_auth()    # Get (username, password) tuple
+```
+
+### SessionManager Object API
+
+```python
+# Main method
+session_manager.get_session(request) -> Session         # Get session for request
+
+# Session configuration
+session_manager.configure(cookie_name, max_age, secure, http_only)
+```
+
+### Session Object (Returned by session_manager.get_session)
+
+```python
+# Properties
+session.id              # Session ID
+session.is_new          # New session flag
+
+# Methods
+session.get(key, default=None)
+session.set(key, value)
+session.delete(key)
+session.clear()
+session.save()          # Explicitly save session (automatic in most cases)
 ```
 
 ### Response Object
@@ -128,23 +346,6 @@ response.body          # Response body
 response.set_cookie(name, value, max_age=None, path="/", 
                    domain=None, secure=False, http_only=True)
 response.delete_cookie(name, path="/", domain=None)
-```
-
-### Session Object (Global in request context)
-
-```python
-# Properties
-session.id              # Session ID
-session.is_new          # New session flag
-
-# Methods
-session.get(key, default=None)
-session.set(key, value)
-session.delete(key)
-session.clear()
-session.save()
-session.flash(message, category="info")
-session.get_flashes(category=None) -> list
 ```
 
 ### FileUpload Object
@@ -210,15 +411,15 @@ Priority order (highest to lowest):
 2. **Named parameters**: `/users/{id}`
 3. **Wildcard**: `/files/*filepath`
 
-## Complete Usage Examples
+## Usage Examples
 
 ### 1. Basic Web Server
 
 ```python
-load("web", "server", "response", "json_response")
+load("web", "create_server", "response", "json_response")
 
 def main():
-    srv = server(host="0.0.0.0", port=8080)
+    srv = create_server(host="0.0.0.0", port=8080)
     
     # Simple text response
     def home(req):
@@ -245,17 +446,10 @@ def main():
             </body>
         </html>
         """
-        return response(html, headers={"Content-Type": "text/html"})
+        return html_response(html)
     
     srv.get("/", home)
     srv.get("/about", about)
-    
-    # Multiple ways to register the same endpoint:
-    # Method 1: Individual method registration
-    # srv.get("/api/info", api_info)  
-    # srv.head("/api/info", api_info)
-    
-    # Method 2: Using server.route() for multiple methods
     srv.route(["GET", "HEAD"], "/api/info", api_info)
     
     print("Server starting on http://{}:{}".format("0.0.0.0", 8080))
@@ -267,28 +461,28 @@ main()
 ### 2. RESTful API with CRUD Operations
 
 ```python
-load("web", "server", "json_response", "error_response")
+load("web", "create_server", "json_response", "error_response")
 load("time")
 
 def main():
-    srv = server(port=8080)
+    srv = create_server(port=8080)
     
-    # In-memory database
-    users = {}
-    next_id = 1
+    # In-memory database (use shared_dict for thread safety)
+    users = shared_dict()
+    next_id = [1]  # Use list to allow modification
     
     # List all users
     def list_users(req):
-        user_list = [user for user in users.values()]
+        user_list = [users[user_id] for user_id in users]
         return json_response(user_list)
     
     # Get single user
     def get_user(req):
-        user_id = req.param("id")
-        if user_id == None:
+        user_id_str = req.param("id")
+        if user_id_str == None:
             return error_response(400, "User ID required")
         
-        user = users.get(int(user_id))
+        user = users.get(int(user_id_str))
         if user == None:
             return error_response(404, "User not found")
         
@@ -307,23 +501,23 @@ def main():
             return error_response(400, "Name and email required")
         
         user = {
-            "id": next_id,
+            "id": next_id[0],
             "name": name,
             "email": email,
             "created_at": time.now().format(time.RFC3339)
         }
-        users[next_id] = user
-        next_id = next_id + 1
+        users[next_id[0]] = user
+        next_id[0] = next_id[0] + 1
         
         return json_response(user, status=201)
     
     # Update user
     def update_user(req):
-        user_id = req.param("id")
-        if user_id == None:
+        user_id_str = req.param("id")
+        if user_id_str == None:
             return error_response(400, "User ID required")
         
-        user_id = int(user_id)
+        user_id = int(user_id_str)
         user = users.get(user_id)
         if user == None:
             return error_response(404, "User not found")
@@ -339,15 +533,16 @@ def main():
             user["email"] = data["email"]
         
         user["updated_at"] = time.now().format(time.RFC3339)
+        users[user_id] = user
         return json_response(user)
     
     # Delete user
     def delete_user(req):
-        user_id = req.param("id")
-        if user_id == None:
+        user_id_str = req.param("id")
+        if user_id_str == None:
             return error_response(400, "User ID required")
         
-        user_id = int(user_id)
+        user_id = int(user_id_str)
         if users.get(user_id) == None:
             return error_response(404, "User not found")
         
@@ -373,10 +568,10 @@ main()
 #### Basic Authentication
 
 ```python
-load("web", "server", "basic_auth", "response", "json_response")
+load("web", "create_server", "basic_auth", "response", "json_response")
 
 def main():
-    srv = server(port=8080)
+    srv = create_server(port=8080)
     
     # Create authenticator
     auth = basic_auth(users={
@@ -429,16 +624,16 @@ main()
 #### Bearer Token Authentication
 
 ```python
-load("web", "server", "bearer_auth", "json_response", "error_response")
+load("web", "create_server", "bearer_auth", "json_response", "error_response")
 
 def main():
-    srv = server(port=8080)
+    srv = create_server(port=8080)
     
     # Valid tokens (in production, check against database)
-    valid_tokens = {
+    valid_tokens = shared_dict({
         "token-123": {"user": "alice", "role": "admin"},
         "token-456": {"user": "bob", "role": "user"}
-    }
+    })
     
     # Token validator function
     def validate_token(token):
@@ -499,131 +694,14 @@ def main():
 main()
 ```
 
-### 4. Session Management
+### 4. File Upload and Static Files
 
 ```python
-load("web", "server", "response", "redirect", "json_response", "get_session")
+load("web", "create_server", "response", "json_response", "send_file", "send_data")
 load("time")
 
 def main():
-    srv = server(
-        port=8080,
-        session_secret="my-secret-key-change-in-production"
-    )
-    
-    # Home page
-    def home(req):
-        session = get_session()
-        username = session.get("username")
-        
-        if username != None:
-            visits = session.get("visits", 0) + 1
-            session.set("visits", visits)
-            
-            html = """
-            <html>
-                <body>
-                    <h1>Welcome back, {}!</h1>
-                    <p>This is visit number {}</p>
-                    <p><a href="/logout">Logout</a></p>
-                </body>
-            </html>
-            """.format(username, visits)
-            return response(html, headers={"Content-Type": "text/html"})
-        
-        html = """
-        <html>
-            <body>
-                <h1>Please Login</h1>
-                <form method="post" action="/login">
-                    <input name="username" placeholder="Username" required>
-                    <input type="password" name="password" placeholder="Password" required>
-                    <button type="submit">Login</button>
-                </form>
-            </body>
-        </html>
-        """
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # Login handler - GET version
-    def login_form(req):
-        return redirect("/")
-    
-    # Login handler - POST version
-    def login_post(req):
-        form = req.form()
-        username = form.get("username")
-        password = form.get("password")
-        
-        # Simple auth (use proper validation in production)
-        if username != None and password == "password":
-            session = get_session()
-            session.set("username", username)
-            session.set("login_time", time.now().format(time.RFC3339))
-            session.flash("Login successful!", "success")
-            return redirect("/")
-        
-        session = get_session()
-        session.flash("Invalid credentials", "error")
-        return redirect("/")
-    
-    # API endpoint
-    def api_status(req):
-        session = get_session()
-        username = session.get("username")
-        
-        if username == None:
-            return error_response(401, "Not authenticated")
-        
-        return json_response({
-            "username": username,
-            "session_id": session.id,
-            "login_time": session.get("login_time"),
-            "visits": session.get("visits", 0)
-        })
-    
-    # CORS preflight handler
-    def api_status_options(req):
-        return response("", headers={
-            "Access-Control-Allow-Origin": "*",
-            "Access-Control-Allow-Methods": "GET, OPTIONS",
-            "Access-Control-Allow-Headers": "Content-Type"
-        })
-    
-    # Logout handler
-    def logout(req):
-        session = get_session()
-        session.clear()
-        session.flash("You have been logged out", "info")
-        return redirect("/")
-    
-    srv.get("/", home)
-    srv.get("/login", login_form)
-    srv.post("/login", login_post)
-    srv.get("/logout", logout)
-    
-    # Alternative ways to register the API status endpoint:
-    # Option 1: Individual methods
-    # srv.get("/api/status", api_status)
-    # srv.options("/api/status", api_status_options)
-    
-    # Option 2: Using server.route() with multiple methods and separate handlers
-    srv.route("GET", "/api/status", api_status)
-    srv.route("OPTIONS", "/api/status", api_status_options)
-    
-    srv.run()
-
-main()
-```
-
-### 5. File Upload and Static Files
-
-```python
-load("web", "server", "response", "json_response", "send_file")
-load("time")
-
-def main():
-    srv = server(port=8080)
+    srv = create_server(port=8080)
     
     # Upload form
     def upload_form(req):
@@ -638,7 +716,7 @@ def main():
             </body>
         </html>
         """
-        return response(html, headers={"Content-Type": "text/html"})
+        return html_response(html)
     
     # Handle upload
     def handle_upload(req):
@@ -686,10 +764,16 @@ def main():
         filepath = "uploads/{}".format(filename)
         return send_file(filepath)
     
+    # Generate and send data as file
+    def generate_csv(req):
+        csv_data = "id,name,email\n1,Alice,alice@example.com\n2,Bob,bob@example.com\n"
+        return send_data(csv_data, "users.csv", "text/csv")
+    
     # Setup routes
     srv.get("/", upload_form)
     srv.post("/upload", handle_upload)
     srv.get("/download/{filename}", download)
+    srv.get("/generate/csv", generate_csv)
     
     # Serve static files
     srv.static("/static", "./static")
@@ -703,128 +787,13 @@ def main():
 main()
 ```
 
-### 6. Middleware and Error Handling
+### 5. Advanced Routing and Route Groups
 
 ```python
-load("web", "server", "response", "json_response", "get_session")
-load("time")
+load("web", "create_server", "json_response", "basic_auth")
 
 def main():
-    srv = server(port=8080, debug=True)
-    
-    # Request timing middleware
-    def timing_middleware(req, next_handler):
-        start = time.now()
-        
-        # Call next handler
-        resp = next_handler(req)
-        
-        # Calculate duration
-        duration = time.since(start)
-        resp.headers["X-Response-Time"] = "{:.3f}ms".format(duration.milliseconds)
-        
-        return resp
-    
-    # Logging middleware
-    def logging_middleware(req, next_handler):
-        print("{} {} {}".format(
-            time.now().format(time.Kitchen),
-            req.method,
-            req.path
-        ))
-        
-        resp = next_handler(req)
-        
-        print("  -> {} in {}".format(
-            resp.status_code,
-            resp.headers.get("X-Response-Time", "unknown")
-        ))
-        
-        return resp
-    
-    # Auth check middleware
-    def auth_middleware(req, next_handler):
-        session = get_session()
-        if session.get("user_id") == None:
-            return error_response(401, "Authentication required")
-        
-        return next_handler(req)
-    
-    # CORS middleware
-    def cors_middleware(req, next_handler):
-        # Handle preflight
-        if req.method == "OPTIONS":
-            return response("", headers={
-                "Access-Control-Allow-Origin": "*",
-                "Access-Control-Allow-Methods": "GET, POST, PUT, DELETE, OPTIONS",
-                "Access-Control-Allow-Headers": "Content-Type, Authorization",
-                "Access-Control-Max-Age": "86400"
-            })
-        
-        # Add CORS headers to response
-        resp = next_handler(req)
-        resp.headers["Access-Control-Allow-Origin"] = "*"
-        return resp
-    
-    # Error handlers
-    def not_found_handler(req):
-        return json_response({
-            "error": "Not Found",
-            "path": req.path,
-            "status": 404
-        }, status=404)
-    
-    def server_error_handler(req):
-        return json_response({
-            "error": "Internal Server Error",
-            "message": "Something went wrong",
-            "status": 500
-        }, status=500)
-    
-    # Routes
-    def public_api(req):
-        return json_response({"message": "Public API endpoint"})
-    
-    def protected_api(req):
-        session = get_session()
-        return json_response({
-            "message": "Protected endpoint",
-            "user_id": session.get("user_id")
-        })
-    
-    def broken_endpoint(req):
-        # This will trigger 500 error
-        fail("Intentional error for testing")
-    
-    # Apply global middleware
-    srv.use(timing_middleware)
-    srv.use(logging_middleware)
-    srv.use(cors_middleware)
-    
-    # Apply auth middleware to specific paths
-    srv.use_for("/api/protected/*", auth_middleware)
-    
-    # Register routes
-    srv.get("/api/public", public_api)
-    srv.get("/api/protected/data", protected_api)
-    srv.get("/api/broken", broken_endpoint)
-    
-    # Error handlers
-    srv.error_handler(404, not_found_handler)
-    srv.error_handler(500, server_error_handler)
-    
-    srv.run()
-
-main()
-```
-
-### 7. Route Groups and Advanced Routing
-
-```python
-load("web", "server", "json_response", "basic_auth")
-
-def main():
-    srv = server(port=8080)
+    srv = create_server(port=8080)
     
     # Create auth for admin routes
     admin_auth = basic_auth(users={"admin": "secret"})
@@ -888,401 +857,29 @@ def main():
     admin.get("/", admin_dashboard)
     admin.get("/stats/users", admin_users)
     
-    # Wildcard routes - separate handlers per method
-    def catch_all_get(req):
-        filepath = req.param("path")
-        return json_response({
-            "message": "GET files",
-            "path": filepath,
-            "method": "GET"
-        })
+    # Multiple error handlers
+    def not_found_handler(req):
+        return json_response({"error": "Not Found"}, status=404)
     
-    def catch_all_post(req):
-        filepath = req.param("path")
-        return json_response({
-            "message": "POST files",
-            "path": filepath,
-            "method": "POST"
-        })
+    def server_error_handler(req):
+        return json_response({"error": "Server Error"}, status=500)
     
-    def catch_all_put(req):
-        filepath = req.param("path")
-        return json_response({
-            "message": "PUT files",
-            "path": filepath,
-            "method": "PUT"
-        })
-    
-    def catch_all_delete(req):
-        filepath = req.param("path")
-        return json_response({
-            "message": "DELETE files",
-            "path": filepath,
-            "method": "DELETE"
-        })
-    
-    # Register each method separately
-    srv.get("/files/*path", catch_all_get)
-    srv.post("/files/*path", catch_all_post)
-    srv.put("/files/*path", catch_all_put)
-    srv.delete("/files/*path", catch_all_delete)
-    
-    # Resource endpoints - showing different approaches
-    
-    # Approach 1: Separate handlers with individual method registration
-    def get_resource(req):
-        resource_id = req.param("id")
-        return json_response({"id": resource_id, "action": "retrieved"})
-    
-    def update_resource(req):
-        resource_id = req.param("id")
-        return json_response({"id": resource_id, "action": "updated"})
-    
-    def delete_resource(req):
-        resource_id = req.param("id")
-        return json_response({"id": resource_id, "action": "deleted"})
-    
-    srv.get("/resource/{id}", get_resource)
-    srv.put("/resource/{id}", update_resource)
-    srv.delete("/resource/{id}", delete_resource)
-    
-    # Approach 2: Single handler with server.route() for multiple methods
-    def multi_method_resource(req):
-        resource_id = req.param("id")
-        
-        if req.method == "GET":
-            return json_response({"id": resource_id, "action": "retrieved"})
-        elif req.method == "PUT":
-            return json_response({"id": resource_id, "action": "updated"})
-        elif req.method == "DELETE":
-            return json_response({"id": resource_id, "action": "deleted"})
-        else:
-            return error_response(405, "Method not allowed")
-    
-    srv.route(["GET", "PUT", "DELETE"], "/multi-resource/{id}", multi_method_resource)
+    # Register error handlers for multiple status codes
+    srv.error_handler([404, 405], not_found_handler)  # Handle both 404 and 405
+    srv.error_handler(500, server_error_handler)
     
     srv.run()
 
 main()
 ```
 
-### 8. Streaming Responses and Large Files
+## Complex Examples
 
-```python
-load("web", "server", "response")
-load("time", "json")
+For more advanced usage examples, see the separate example files:
 
-def main():
-    srv = server(port=8080)
-    
-    # Stream large CSV data
-    def stream_csv(req):
-        def generate_csv():
-            # Header
-            yield "id,name,email,created\n"
-            
-            # Generate 10000 rows
-            for i in range(10000):
-                yield "{},User{},user{}@example.com,{}\n".format(
-                    i + 1,
-                    i + 1,
-                    i + 1,
-                    time.now().format(time.RFC3339)
-                )
-        
-        return response(
-            generate_csv(),
-            headers={
-                "Content-Type": "text/csv",
-                "Content-Disposition": "attachment; filename=users.csv"
-            }
-        )
-    
-    # Stream JSON array
-    def stream_json_array(req):
-        def generate_json():
-            yield "["
-            
-            for i in range(1000):
-                if i > 0:
-                    yield ","
-                yield json.encode({
-                    "id": i + 1,
-                    "value": "Item {}".format(i + 1),
-                    "timestamp": time.now().unix
-                })
-            
-            yield "]"
-        
-        return response(
-            generate_json(),
-            headers={"Content-Type": "application/json"}
-        )
-    
-    # Server-sent events
-    def sse_endpoint(req):
-        def generate_events():
-            for i in range(10):
-                event = "data: {}\n\n".format(json.encode({
-                    "message": "Event {}".format(i + 1),
-                    "time": time.now().format(time.RFC3339)
-                }))
-                yield event
-                time.sleep(1)  # Simulate delay
-        
-        return response(
-            generate_events(),
-            headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive"
-            }
-        )
-    
-    srv.get("/download/csv", stream_csv)
-    srv.get("/api/stream", stream_json_array)
-    srv.get("/events", sse_endpoint)
-    
-    srv.run()
-
-main()
-```
-
-### 9. Complete Blog Application
-
-```python
-load("web", "server", "response", "json_response", "redirect", 
-     "get_session", "basic_auth", "send_file")
-load("time")
-
-def main():
-    srv = server(
-        port=8080,
-        session_secret="blog-secret-key"
-    )
-    
-    # Simple in-memory database
-    posts = []
-    comments = {}
-    next_post_id = 1
-    next_comment_id = 1
-    
-    # Admin auth
-    admin_auth = basic_auth(users={"admin": "admin123"})
-    
-    # Helper to render HTML template
-    def render_html(title, content):
-        return """
-        <html>
-            <head>
-                <title>{}</title>
-                <link rel="stylesheet" href="/static/style.css">
-            </head>
-            <body>
-                <header>
-                    <h1>My Blog</h1>
-                    <nav>
-                        <a href="/">Home</a>
-                        <a href="/admin">Admin</a>
-                    </nav>
-                </header>
-                <main>
-                    {}
-                </main>
-            </body>
-        </html>
-        """.format(title, content)
-    
-    # Home page - list posts
-    def home(req):
-        content = "<h2>Recent Posts</h2>"
-        
-        if len(posts) == 0:
-            content = content + "<p>No posts yet.</p>"
-        else:
-            content = content + "<ul>"
-            for post in posts:
-                content = content + '<li><a href="/post/{}">{}</a> - {}</li>'.format(
-                    post["id"], 
-                    post["title"],
-                    post["created"]
-                )
-            content = content + "</ul>"
-        
-        html = render_html("Home", content)
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # View single post
-    def view_post(req):
-        post_id = int(req.param("id"))
-        post = None
-        
-        for p in posts:
-            if p["id"] == post_id:
-                post = p
-                break
-        
-        if post == None:
-            return error_response(404, "Post not found")
-        
-        # Build post HTML
-        content = "<article>"
-        content = content + "<h2>{}</h2>".format(post["title"])
-        content = content + "<p class='meta'>Posted on {}</p>".format(post["created"])
-        content = content + "<div class='content'>{}</div>".format(post["content"])
-        content = content + "</article>"
-        
-        # Add comments section
-        content = content + "<h3>Comments</h3>"
-        post_comments = comments.get(post_id, [])
-        
-        if len(post_comments) == 0:
-            content = content + "<p>No comments yet.</p>"
-        else:
-            for comment in post_comments:
-                content = content + "<div class='comment'>"
-                content = content + "<strong>{}</strong>: {}".format(
-                    comment["author"], 
-                    comment["text"]
-                )
-                content = content + "</div>"
-        
-        # Comment form
-        content = content + """
-        <form method="post" action="/post/{}/comment">
-            <input name="author" placeholder="Your name" required>
-            <textarea name="text" placeholder="Your comment" required></textarea>
-            <button type="submit">Post Comment</button>
-        </form>
-        """.format(post_id)
-        
-        html = render_html(post["title"], content)
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # Post comment
-    def post_comment(req):
-        post_id = int(req.param("id"))
-        
-        # Check post exists
-        post_exists = False
-        for p in posts:
-            if p["id"] == post_id:
-                post_exists = True
-                break
-        
-        if not post_exists:
-            return error_response(404, "Post not found")
-        
-        form = req.form()
-        author = form.get("author", "").strip()
-        text = form.get("text", "").strip()
-        
-        if author == "" or text == "":
-            return error_response(400, "Author and text required")
-        
-        # Add comment
-        if comments.get(post_id) == None:
-            comments[post_id] = []
-        
-        comment = {
-            "id": next_comment_id,
-            "author": author,
-            "text": text,
-            "created": time.now().format(time.DateTime)
-        }
-        comments[post_id].append(comment)
-        next_comment_id = next_comment_id + 1
-        
-        return redirect("/post/{}".format(post_id))
-    
-    # Admin dashboard
-    def admin_dashboard(req):
-        content = "<h2>Admin Dashboard</h2>"
-        content = content + "<p><a href='/admin/new'>Create New Post</a></p>"
-        content = content + "<h3>All Posts</h3>"
-        
-        if len(posts) == 0:
-            content = content + "<p>No posts yet.</p>"
-        else:
-            content = content + "<ul>"
-            for post in posts:
-                content = content + '<li>{} - <a href="/admin/edit/{}">Edit</a></li>'.format(
-                    post["title"], 
-                    post["id"]
-                )
-            content = content + "</ul>"
-        
-        html = render_html("Admin Dashboard", content)
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # New post form
-    def new_post_form(req):
-        content = """
-        <h2>Create New Post</h2>
-        <form method="post" action="/admin/new">
-            <input name="title" placeholder="Post title" required>
-            <textarea name="content" placeholder="Post content" rows="10" required></textarea>
-            <button type="submit">Create Post</button>
-        </form>
-        """
-        
-        html = render_html("New Post", content)
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # Create post
-    def create_post(req):
-        form = req.form()
-        title = form.get("title", "").strip()
-        content = form.get("content", "").strip()
-        
-        if title == "" or content == "":
-            return error_response(400, "Title and content required")
-        
-        post = {
-            "id": next_post_id,
-            "title": title,
-            "content": content,
-            "created": time.now().format(time.DateTime)
-        }
-        posts.append(post)
-        next_post_id = next_post_id + 1
-        
-        session = get_session()
-        session.flash("Post created successfully!", "success")
-        
-        return redirect("/admin")
-    
-    # API endpoints
-    def api_posts(req):
-        return json_response(posts)
-    
-    def api_post_comments(req):
-        post_id = int(req.param("id"))
-        return json_response(comments.get(post_id, []))
-    
-    # Register routes
-    srv.get("/", home)
-    srv.get("/post/{id}", view_post)
-    srv.post("/post/{id}/comment", post_comment)
-    
-    # Admin routes (protected)
-    srv.use_for("/admin/*", admin_auth.middleware())
-    srv.get("/admin", admin_dashboard)
-    srv.get("/admin/new", new_post_form)
-    srv.post("/admin/new", create_post)
-    
-    # API routes
-    srv.get("/api/posts", api_posts)
-    srv.get("/api/posts/{id}/comments", api_post_comments)
-    
-    # Static files
-    srv.static("/static", "./static")
-    
-    print("Blog running on http://localhost:8080")
-    srv.run()
-
-main()
-```
+- **[examples/blog_app.star](examples/blog_app.star)**: Complete blog application with admin functionality, sessions, and CRUD operations
+- **[examples/session_management.star](examples/session_management.star)**: Session handling, user login/logout, and state management
+- **[examples/middleware_auth.star](examples/middleware_auth.star)**: Advanced middleware patterns and authentication systems
 
 ## Configuration System
 
@@ -1296,11 +893,6 @@ type Config struct {
     ReadTimeout         *base.ConfigOption[int]       // Default: 30 seconds
     WriteTimeout        *base.ConfigOption[int]       // Default: 30 seconds
     MaxBodySize         *base.ConfigOption[int64]     // Default: 32MB
-    
-    // Session settings
-    SessionSecret       *base.ConfigOption[string]    // Required for sessions
-    SessionCookieName   *base.ConfigOption[string]    // Default: "session"
-    SessionMaxAge       *base.ConfigOption[int]       // Default: 86400 (24 hours)
     
     // Security settings
     EnableCORS          *base.ConfigOption[bool]      // Default: false
@@ -1321,11 +913,6 @@ export WEB_PORT="8080"
 export WEB_READ_TIMEOUT="60"
 export WEB_WRITE_TIMEOUT="60"
 export WEB_MAX_BODY_SIZE="104857600"  # 100MB
-
-# Session configuration
-export WEB_SESSION_SECRET="your-secret-key-here"
-export WEB_SESSION_COOKIE_NAME="app_session"
-export WEB_SESSION_MAX_AGE="86400"
 
 # Security configuration
 export WEB_ENABLE_CORS="true"
@@ -1354,6 +941,10 @@ web/
 ├── utils.go            # Helper functions
 ├── web_test.go         # Unit tests
 ├── example_test.go     # Integration tests
+├── examples/           # Example Starlark files
+│   ├── blog_app.star
+│   ├── session_management.star
+│   └── middleware_auth.star
 └── README.md           # User documentation
 ```
 
@@ -1363,13 +954,13 @@ web/
 
 ```go
 type Server struct {
-    config      *Config
-    httpServer  *http.Server
-    router      *Router
-    middleware  []MiddlewareFunc
-    sessions    *SessionManager
-    running     atomic.Bool
-    mu          sync.RWMutex
+    config         *Config
+    httpServer     *http.Server
+    router         *Router
+    middleware     []MiddlewareFunc
+    sessionManager *SessionManager
+    running        atomic.Bool
+    mu             sync.RWMutex
 }
 ```
 
@@ -1414,7 +1005,7 @@ type HandlerFunc func(*Request) *Response
 #### Success Criteria
 
 ```python
-srv = server(port=8080)
+srv = create_server(port=8080)
 srv.get("/", lambda req: response("Hello, World!"))
 srv.get("/api/data", lambda req: json_response({"status": "ok"}))
 srv.run()
@@ -1475,7 +1066,11 @@ srv.use(basic_auth({"admin": "password"}).middleware("/admin/*"))
 #### Success Criteria
 
 ```python
+session_manager = create_session_manager(secret="key")
+srv = create_server(session_manager=session_manager)
+
 def protected(request):
+    session = session_manager.get_session(request)
     if session.get("user_id") == None:
         return redirect("/login")
     return response("Protected content")
@@ -1544,19 +1139,20 @@ def handler(req):
 1. **Use middleware sparingly**: Each middleware adds overhead
 2. **Cache static files**: Use proper cache headers
 3. **Limit session data**: Store only essential data in sessions
-4. **Use streaming for large responses**: Don't load everything in memory
-5. **Enable compression**: For text-based responses
+4. **Enable compression**: For text-based responses
+5. **Use shared_dict**: For thread-safe shared state
 
 ## Migration Guide from Flask
 
 | Flask | Starlark Web |
 |-------|--------------|
+| `app = Flask(__name__)` | `srv = create_server()` |
 | `@app.route("/")` | `srv.get("/", handler)` |
 | `f"Hello {name}"` | `"Hello {}".format(name)` |
 | `try/except` | Use `fail()` or check for `None` |
 | `if x is None` | `if x == None` |
 | `request` global | `request` parameter in handler |
-| `session` global | `get_session()` function |
+| `session` global | `session_manager.get_session(request)` |
 
 ## Success Metrics
 
