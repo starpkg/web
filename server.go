@@ -39,16 +39,23 @@ type Server struct {
 	sessionManager *SessionManager
 	running        bool
 	mu             sync.RWMutex
+
+	// Embedded route registrar for consistent route registration
+	*routeRegistrarImpl
 }
 
 // NewServer creates a new HTTP server instance
 func NewServer(config *ServerConfig) *Server {
+	router := NewRouter()
+
 	server := &Server{
 		config:         config,
-		router:         NewRouter(),
+		router:         router,
 		middleware:     make([]MiddlewareFunc, 0),
 		pathMiddleware: make(map[string][]MiddlewareFunc),
 		errorHandlers:  make(map[int]HandlerFunc),
+		// Initialize the embedded route registrar with identity path transformer
+		routeRegistrarImpl: newRouteRegistrarImpl(router, identityPathTransformer),
 	}
 
 	// Set the router's server reference for error handling
@@ -214,131 +221,8 @@ func (s *Server) Route(thread *starlark.Thread, b *starlark.Builtin, args starla
 	return starlark.None, nil
 }
 
-// Get registers a GET route
-func (s *Server) Get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("GET", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Post registers a POST route
-func (s *Server) Post(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("POST", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Put registers a PUT route
-func (s *Server) Put(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("PUT", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Delete registers a DELETE route
-func (s *Server) Delete(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("DELETE", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Patch registers a PATCH route
-func (s *Server) Patch(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("PATCH", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Options registers an OPTIONS route
-func (s *Server) Options(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("OPTIONS", path.GoString(), handler)
-	return starlark.None, nil
-}
-
-// Head registers a HEAD route
-func (s *Server) Head(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	s.router.AddRoute("HEAD", path.GoString(), handler)
-	return starlark.None, nil
-}
+// HTTP method registration methods are now provided by the embedded routeRegistrarImpl
+// These methods are automatically generated and eliminate code duplication
 
 // Use adds global middleware
 func (s *Server) Use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
@@ -662,15 +546,9 @@ func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args
 
 // Struct returns a Starlark struct representation of the Server
 func (s *Server) Struct() *starlarkstruct.Struct {
+	// Start with the base structure
 	sd := starlark.StringDict{
 		"route":         starlark.NewBuiltin("route", s.Route),
-		"get":           starlark.NewBuiltin("get", s.Get),
-		"post":          starlark.NewBuiltin("post", s.Post),
-		"put":           starlark.NewBuiltin("put", s.Put),
-		"delete":        starlark.NewBuiltin("delete", s.Delete),
-		"patch":         starlark.NewBuiltin("patch", s.Patch),
-		"options":       starlark.NewBuiltin("options", s.Options),
-		"head":          starlark.NewBuiltin("head", s.Head),
 		"use":           starlark.NewBuiltin("use", s.Use),
 		"use_for":       starlark.NewBuiltin("use_for", s.UseFor),
 		"group":         starlark.NewBuiltin("group", s.Group),
@@ -682,5 +560,12 @@ func (s *Server) Struct() *starlarkstruct.Struct {
 		"stop":          starlark.NewBuiltin("stop", s.Stop),
 		"is_running":    starlark.NewBuiltin("is_running", s.IsRunning),
 	}
+
+	// Add HTTP method registration builtins using the shared factory
+	routeBuiltins := createRouteBuiltins(s)
+	for name, builtin := range routeBuiltins {
+		sd[name] = builtin
+	}
+
 	return starlarkstruct.FromStringDict(starlark.String("Server"), sd)
 }
