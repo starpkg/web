@@ -125,11 +125,11 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"api_key_auth":           starlark.NewBuiltin(ModuleName+".api_key_auth", m.apiKeyAuth),
 
 		// Built-in middleware functions
-		"cors_middleware":             starlark.NewBuiltin(ModuleName+".cors_middleware", m.corsMiddleware),
-		"logging_middleware":          starlark.NewBuiltin(ModuleName+".logging_middleware", m.loggingMiddleware),
-		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", m.timingMiddleware),
-		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", m.compressionMiddleware),
-		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", m.securityHeadersMiddleware),
+		"cors_middleware":             starlark.NewBuiltin(ModuleName+".cors_middleware", corsMiddleware),
+		"logging_middleware":          starlark.NewBuiltin(ModuleName+".logging_middleware", loggingMiddleware),
+		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", timingMiddleware),
+		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", compressionMiddleware),
+		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", securityHeadersMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
@@ -562,31 +562,4 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 	}
 
 	return auth.Struct(), nil
-}
-
-// Built-in middleware functions
-
-// corsMiddleware creates CORS middleware
-func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return corsMiddleware(thread, b, args, kwargs)
-}
-
-// loggingMiddleware creates logging middleware
-func (m *Module) loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return loggingMiddleware(thread, b, args, kwargs)
-}
-
-// timingMiddleware creates timing middleware
-func (m *Module) timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return timingMiddleware(thread, b, args, kwargs)
-}
-
-// compressionMiddleware creates compression middleware
-func (m *Module) compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return compressionMiddleware(thread, b, args, kwargs)
-}
-
-// securityHeadersMiddleware creates security headers middleware
-func (m *Module) securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return securityHeadersMiddleware(thread, b, args, kwargs)
 }
