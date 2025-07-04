@@ -1,6 +1,7 @@
 package web
 
 import (
+	"fmt"
 	"testing"
 
 	"github.com/1set/starlet"
@@ -41,7 +42,7 @@ main()
 	machine := starlet.NewDefault()
 	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		// Print function for testing
-		println(msg)
+		fmt.Println(msg)
 	})
 
 	// Load web module
@@ -123,7 +124,7 @@ main()
 	// Create machine with web module
 	machine := starlet.NewDefault()
 	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
-		println(msg)
+		fmt.Println(msg)
 	})
 
 	// Load web module
@@ -179,7 +180,7 @@ main()
 	// Create machine with web module
 	machine := starlet.NewDefault()
 	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
-		println(msg)
+		fmt.Println(msg)
 	})
 
 	// Load web module
