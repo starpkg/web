@@ -170,11 +170,7 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 
 	// Create and return server instance
 	server := NewServer(config)
-	result, err := dataconv.Marshal(server)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal server: %v", err)
-	}
-	return result, nil
+	return server.Struct(), nil
 }
 
 // createSessionManager creates a session manager for handling user sessions
@@ -572,157 +568,25 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 
 // corsMiddleware creates CORS middleware
 func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		origins     = starlark.NewList([]starlark.Value{starlark.String("*")})
-		methods     = starlark.NewList([]starlark.Value{starlark.String("GET"), starlark.String("POST"), starlark.String("PUT"), starlark.String("DELETE"), starlark.String("OPTIONS")})
-		headers     = starlark.NewList([]starlark.Value{starlark.String("Content-Type"), starlark.String("Authorization")})
-		credentials = starlark.Bool(false)
-		maxAge      = starlark.MakeInt(86400)
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"origins?", &origins,
-		"methods?", &methods,
-		"headers?", &headers,
-		"credentials?", &credentials,
-		"max_age?", &maxAge,
-	); err != nil {
-		return none, err
-	}
-
-	// Convert to Go slices
-	originSlice := make([]string, origins.Len())
-	for i := 0; i < origins.Len(); i++ {
-		originSlice[i] = dataconv.StarString(origins.Index(i))
-	}
-
-	methodSlice := make([]string, methods.Len())
-	for i := 0; i < methods.Len(); i++ {
-		methodSlice[i] = dataconv.StarString(methods.Index(i))
-	}
-
-	headerSlice := make([]string, headers.Len())
-	for i := 0; i < headers.Len(); i++ {
-		headerSlice[i] = dataconv.StarString(headers.Index(i))
-	}
-
-	maxAgeInt, _ := maxAge.Int64()
-
-	middleware := NewCORSMiddleware(originSlice, methodSlice, headerSlice, bool(credentials), int(maxAgeInt))
-	return dataconv.WrapGoValue(middleware), nil
+	return corsMiddleware(thread, b, args, kwargs)
 }
 
 // loggingMiddleware creates logging middleware
 func (m *Module) loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		format      = starlark.String("{method} {path} {status} {duration}")
-		skipPaths   = starlark.NewList(nil)
-		includeBody = starlark.Bool(false)
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"format?", &format,
-		"skip_paths?", &skipPaths,
-		"include_body?", &includeBody,
-	); err != nil {
-		return none, err
-	}
-
-	// Convert skip_paths to Go slice
-	skipPathSlice := make([]string, skipPaths.Len())
-	for i := 0; i < skipPaths.Len(); i++ {
-		skipPathSlice[i] = dataconv.StarString(skipPaths.Index(i))
-	}
-
-	middleware := NewLoggingMiddleware(format.GoString(), skipPathSlice, bool(includeBody))
-	return dataconv.WrapGoValue(middleware), nil
+	return loggingMiddleware(thread, b, args, kwargs)
 }
 
 // timingMiddleware creates timing middleware
 func (m *Module) timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		header    = starlark.String("X-Response-Time")
-		precision = starlark.MakeInt(3)
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"header?", &header,
-		"precision?", &precision,
-	); err != nil {
-		return none, err
-	}
-
-	precisionInt, _ := precision.Int64()
-
-	middleware := NewTimingMiddleware(header.GoString(), int(precisionInt))
-	return dataconv.WrapGoValue(middleware), nil
+	return timingMiddleware(thread, b, args, kwargs)
 }
 
 // compressionMiddleware creates compression middleware
 func (m *Module) compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		level   = starlark.MakeInt(6)
-		minSize = starlark.MakeInt(1024)
-		types   = starlark.NewList([]starlark.Value{
-			starlark.String("text/html"),
-			starlark.String("text/css"),
-			starlark.String("application/javascript"),
-			starlark.String("application/json"),
-		})
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"level?", &level,
-		"min_size?", &minSize,
-		"types?", &types,
-	); err != nil {
-		return none, err
-	}
-
-	levelInt, _ := level.Int64()
-	minSizeInt, _ := minSize.Int64()
-
-	// Convert types to Go slice
-	typeSlice := make([]string, types.Len())
-	for i := 0; i < types.Len(); i++ {
-		typeSlice[i] = dataconv.StarString(types.Index(i))
-	}
-
-	middleware := NewCompressionMiddleware(int(levelInt), int(minSizeInt), typeSlice)
-	return dataconv.WrapGoValue(middleware), nil
+	return compressionMiddleware(thread, b, args, kwargs)
 }
 
 // securityHeadersMiddleware creates security headers middleware
 func (m *Module) securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		frameOptions       = starlark.String("DENY")
-		contentTypeOptions = starlark.String("nosniff")
-		xssProtection      = starlark.String("1; mode=block")
-		hsts               = starlark.String("")
-		csp                = starlark.String("")
-		referrerPolicy     = starlark.String("strict-origin-when-cross-origin")
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"frame_options?", &frameOptions,
-		"content_type_options?", &contentTypeOptions,
-		"xss_protection?", &xssProtection,
-		"hsts?", &hsts,
-		"csp?", &csp,
-		"referrer_policy?", &referrerPolicy,
-	); err != nil {
-		return none, err
-	}
-
-	config := SecurityHeadersConfig{
-		FrameOptions:       frameOptions.GoString(),
-		ContentTypeOptions: contentTypeOptions.GoString(),
-		XSSProtection:      xssProtection.GoString(),
-		HSTS:               hsts.GoString(),
-		CSP:                csp.GoString(),
-		ReferrerPolicy:     referrerPolicy.GoString(),
-	}
-
-	middleware := NewSecurityHeadersMiddleware(config)
-	return dataconv.WrapGoValue(middleware), nil
+	return securityHeadersMiddleware(thread, b, args, kwargs)
 }

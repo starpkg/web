@@ -11,6 +11,7 @@ import (
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // ServerConfig holds the configuration for the HTTP server
@@ -453,4 +454,25 @@ func (s *Server) IsRunning(thread *starlark.Thread, b *starlark.Builtin, args st
 	running := s.running
 	s.mu.RUnlock()
 	return starlark.Bool(running), nil
+}
+
+// Struct returns a Starlark struct representation of the Server
+func (s *Server) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"route":            starlark.NewBuiltin("route", s.Route),
+		"get":              starlark.NewBuiltin("get", s.Get),
+		"post":             starlark.NewBuiltin("post", s.Post),
+		"put":              starlark.NewBuiltin("put", s.Put),
+		"delete":           starlark.NewBuiltin("delete", s.Delete),
+		"patch":            starlark.NewBuiltin("patch", s.Patch),
+		"options":          starlark.NewBuiltin("options", s.Options),
+		"head":             starlark.NewBuiltin("head", s.Head),
+		"use":              starlark.NewBuiltin("use", s.Use),
+		"static":           starlark.NewBuiltin("static", s.Static),
+		"run":              starlark.NewBuiltin("run", s.Run),
+		"start_background": starlark.NewBuiltin("start_background", s.StartBackground),
+		"stop":             starlark.NewBuiltin("stop", s.Stop),
+		"is_running":       starlark.NewBuiltin("is_running", s.IsRunning),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("Server"), sd)
 }

@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"github.com/1set/starlet"
+	"go.starlark.net/starlark"
 )
 
 func ExampleBasicWebServer() {
@@ -37,17 +38,19 @@ main()
 `
 
 	// Create machine with web module
-	machine := starlet.NewMachine()
-	machine.SetPrintFunc(func(thread *starlet.Thread, msg string) {
+	machine := starlet.NewDefault()
+	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		// Print function for testing
 		println(msg)
 	})
 
 	// Load web module
 	webModule := NewModule()
-	machine.AddModule(ModuleName, webModule.LoadModule())
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
 
-	_, err := machine.ExecString(script)
+	_, err := machine.RunScript([]byte(script), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -118,16 +121,18 @@ main()
 `
 
 	// Create machine with web module
-	machine := starlet.NewMachine()
-	machine.SetPrintFunc(func(thread *starlet.Thread, msg string) {
+	machine := starlet.NewDefault()
+	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		println(msg)
 	})
 
 	// Load web module
 	webModule := NewModule()
-	machine.AddModule(ModuleName, webModule.LoadModule())
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
 
-	_, err := machine.ExecString(script)
+	_, err := machine.RunScript([]byte(script), nil)
 	if err != nil {
 		panic(err)
 	}
@@ -172,16 +177,18 @@ main()
 `
 
 	// Create machine with web module
-	machine := starlet.NewMachine()
-	machine.SetPrintFunc(func(thread *starlet.Thread, msg string) {
+	machine := starlet.NewDefault()
+	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		println(msg)
 	})
 
 	// Load web module
 	webModule := NewModule()
-	machine.AddModule(ModuleName, webModule.LoadModule())
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
 
-	_, err := machine.ExecString(script)
+	_, err := machine.RunScript([]byte(script), nil)
 	if err != nil {
 		panic(err)
 	}
