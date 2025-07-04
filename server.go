@@ -33,6 +33,8 @@ type Server struct {
 	httpServer     *http.Server
 	router         *Router
 	middleware     []MiddlewareFunc
+	pathMiddleware map[string][]MiddlewareFunc // Added for path-specific middleware
+	errorHandlers  map[int]HandlerFunc         // Added for custom error handlers
 	sessionManager *SessionManager
 	running        bool
 	mu             sync.RWMutex
@@ -41,9 +43,11 @@ type Server struct {
 // NewServer creates a new HTTP server instance
 func NewServer(config *ServerConfig) *Server {
 	server := &Server{
-		config:     config,
-		router:     NewRouter(),
-		middleware: make([]MiddlewareFunc, 0),
+		config:         config,
+		router:         NewRouter(),
+		middleware:     make([]MiddlewareFunc, 0),
+		pathMiddleware: make(map[string][]MiddlewareFunc),
+		errorHandlers:  make(map[int]HandlerFunc),
 	}
 
 	// Create HTTP server
@@ -65,7 +69,24 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Build middleware chain
 	handler := s.router.ServeHTTP
 
-	// Apply middleware in reverse order
+	// Apply path-specific middleware if any matches
+	path := r.URL.Path
+	for pattern, middlewares := range s.pathMiddleware {
+		// Create pattern matcher
+		pathPattern, err := newPathPattern(pattern)
+		if err == nil && pathPattern.matches(path) {
+			// Apply middleware in reverse order (so they execute in the correct order)
+			for i := len(middlewares) - 1; i >= 0; i-- {
+				middleware := middlewares[i]
+				next := handler
+				handler = func(req *Request) *Response {
+					return middleware(req, next)
+				}
+			}
+		}
+	}
+
+	// Apply global middleware in reverse order
 	for i := len(s.middleware) - 1; i >= 0; i-- {
 		middleware := s.middleware[i]
 		next := handler
@@ -456,6 +477,161 @@ func (s *Server) IsRunning(thread *starlark.Thread, b *starlark.Builtin, args st
 	return starlark.Bool(running), nil
 }
 
+// UseFor registers middleware for specific path patterns
+func (s *Server) UseFor(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		pathPattern    starlark.String
+		middlewareFunc starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path_pattern", &pathPattern,
+		"middleware", &middlewareFunc,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Convert Starlark middleware to Go middleware function
+	middleware := wrapStarlarkMiddleware(middlewareFunc)
+
+	// Add middleware to path-specific middleware map
+	pattern := pathPattern.GoString()
+	s.mu.Lock()
+	if _, exists := s.pathMiddleware[pattern]; !exists {
+		s.pathMiddleware[pattern] = []MiddlewareFunc{middleware}
+	} else {
+		s.pathMiddleware[pattern] = append(s.pathMiddleware[pattern], middleware)
+	}
+	s.mu.Unlock()
+
+	return starlark.None, nil
+}
+
+// Group creates a route group with a common prefix
+func (s *Server) Group(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var prefix starlark.String
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "prefix", &prefix); err != nil {
+		return starlark.None, err
+	}
+
+	// Create a new RouteGroup
+	group := NewRouteGroup(s, prefix.GoString())
+
+	// Marshal to Starlark
+	result, err := dataconv.Marshal(group)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal route group: %v", err)
+	}
+
+	return result, nil
+}
+
+// SPA configures a Single Page Application route
+func (s *Server) SPA(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		urlPath   starlark.String
+		directory starlark.String
+		fallback  = starlark.String("index.html")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"url_path", &urlPath,
+		"directory", &directory,
+		"fallback?", &fallback,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Add SPA route to router
+	s.router.AddSPARoute(urlPath.GoString(), directory.GoString(), fallback.GoString())
+
+	return starlark.None, nil
+}
+
+// ErrorHandler registers custom error handlers for specific status codes
+func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		statusCodes starlark.Value
+		handler     starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"status_codes", &statusCodes,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Wrap the handler
+	handlerFunc := func(req *Request) *Response {
+		// Call the handler
+		reqValue, err := dataconv.Marshal(req)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Failed to marshal request: %v", err),
+			}
+		}
+
+		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{reqValue}, nil)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Error handler error: %v", err),
+			}
+		}
+
+		// Convert result back to Response
+		goValue, err := dataconv.Unmarshal(result)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+			}
+		}
+
+		if resp, ok := goValue.(*Response); ok {
+			return resp
+		}
+
+		return &Response{
+			StatusCode: 500,
+			Headers:    make(http.Header),
+			Body:       "Invalid handler response",
+		}
+	}
+
+	// Register handler for each status code
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	// Handle both single int and list of ints
+	if statusInt, ok := statusCodes.(starlark.Int); ok {
+		code, ok := statusInt.Int64()
+		if !ok {
+			return starlark.None, fmt.Errorf("invalid status code")
+		}
+		s.errorHandlers[int(code)] = handlerFunc
+	} else if statusList, ok := statusCodes.(*starlark.List); ok {
+		for i := 0; i < statusList.Len(); i++ {
+			if codeVal, ok := statusList.Index(i).(starlark.Int); ok {
+				if code, ok := codeVal.Int64(); ok {
+					s.errorHandlers[int(code)] = handlerFunc
+				} else {
+					return starlark.None, fmt.Errorf("invalid status code in list at index %d", i)
+				}
+			} else {
+				return starlark.None, fmt.Errorf("status code at index %d is not an integer", i)
+			}
+		}
+	} else {
+		return starlark.None, fmt.Errorf("status_codes must be an int or list of ints")
+	}
+
+	return starlark.None, nil
+}
+
 // Struct returns a Starlark struct representation of the Server
 func (s *Server) Struct() *starlarkstruct.Struct {
 	sd := starlark.StringDict{
@@ -468,7 +644,11 @@ func (s *Server) Struct() *starlarkstruct.Struct {
 		"options":          starlark.NewBuiltin("options", s.Options),
 		"head":             starlark.NewBuiltin("head", s.Head),
 		"use":              starlark.NewBuiltin("use", s.Use),
+		"use_for":          starlark.NewBuiltin("use_for", s.UseFor),
+		"group":            starlark.NewBuiltin("group", s.Group),
 		"static":           starlark.NewBuiltin("static", s.Static),
+		"spa":              starlark.NewBuiltin("spa", s.SPA),
+		"error_handler":    starlark.NewBuiltin("error_handler", s.ErrorHandler),
 		"run":              starlark.NewBuiltin("run", s.Run),
 		"start_background": starlark.NewBuiltin("start_background", s.StartBackground),
 		"stop":             starlark.NewBuiltin("stop", s.Stop),

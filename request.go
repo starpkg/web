@@ -13,6 +13,7 @@ import (
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // Request wraps an HTTP request with additional functionality for Starlark
@@ -42,35 +43,72 @@ func NewRequest(r *http.Request) *Request {
 	}
 }
 
-// Starlark-accessible methods
+// Struct returns a Starlark struct representation of the Request
+func (r *Request) Struct() *starlarkstruct.Struct {
+	// Create headers dict
+	headers := starlark.NewDict(len(r.Request.Header))
+	for name, values := range r.Request.Header {
+		if len(values) == 1 {
+			headers.SetKey(starlark.String(name), starlark.String(values[0]))
+		} else {
+			valueList := make([]starlark.Value, len(values))
+			for i, v := range values {
+				valueList[i] = starlark.String(v)
+			}
+			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
+		}
+	}
 
-// Method returns the HTTP method
-func (r *Request) Method() starlark.String {
-	return starlark.String(r.Request.Method)
+	// Create query dict
+	query := starlark.NewDict(len(r.Request.URL.Query()))
+	for name, values := range r.Request.URL.Query() {
+		if len(values) == 1 {
+			query.SetKey(starlark.String(name), starlark.String(values[0]))
+		} else {
+			valueList := make([]starlark.Value, len(values))
+			for i, v := range values {
+				valueList[i] = starlark.String(v)
+			}
+			query.SetKey(starlark.String(name), starlark.NewList(valueList))
+		}
+	}
+
+	// Create context dict
+	ctx := starlark.NewDict(len(r.context))
+	for key, value := range r.context {
+		starlarkValue, err := dataconv.Marshal(value)
+		if err == nil {
+			ctx.SetKey(starlark.String(key), starlarkValue)
+		}
+	}
+
+	// Build struct with properties
+	sd := starlark.StringDict{
+		"method":       starlark.String(r.Request.Method),
+		"url":          starlark.String(r.Request.URL.String()),
+		"path":         starlark.String(r.Request.URL.Path),
+		"host":         starlark.String(r.Request.Host),
+		"remote":       starlark.String(r.Request.RemoteAddr),
+		"client_ip":    r.getClientIP(),
+		"proto":        starlark.String(r.Request.Proto),
+		"headers":      headers,
+		"query":        query,
+		"context":      ctx,
+		"body":         starlark.NewBuiltin("body", r.Body),
+		"json":         starlark.NewBuiltin("json", r.JSON),
+		"form":         starlark.NewBuiltin("form", r.Form),
+		"files":        starlark.NewBuiltin("files", r.Files),
+		"cookie":       starlark.NewBuiltin("cookie", r.Cookie),
+		"param":        starlark.NewBuiltin("param", r.Param),
+		"get_header":   starlark.NewBuiltin("get_header", r.GetHeader),
+		"bearer_token": starlark.NewBuiltin("bearer_token", r.BearerToken),
+		"basic_auth":   starlark.NewBuiltin("basic_auth", r.BasicAuth),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("Request"), sd)
 }
 
-// URL returns the request URL
-func (r *Request) URL() starlark.String {
-	return starlark.String(r.Request.URL.String())
-}
-
-// Path returns the URL path
-func (r *Request) Path() starlark.String {
-	return starlark.String(r.Request.URL.Path)
-}
-
-// Host returns the host header
-func (r *Request) Host() starlark.String {
-	return starlark.String(r.Request.Host)
-}
-
-// Remote returns the remote address
-func (r *Request) Remote() starlark.String {
-	return starlark.String(r.Request.RemoteAddr)
-}
-
-// ClientIP extracts the client IP address
-func (r *Request) ClientIP() starlark.String {
+// getClientIP extracts the client IP address
+func (r *Request) getClientIP() starlark.String {
 	// Check X-Forwarded-For header first
 	xff := r.Request.Header.Get("X-Forwarded-For")
 	if xff != "" {
@@ -92,57 +130,6 @@ func (r *Request) ClientIP() starlark.String {
 		ip = ip[:colon]
 	}
 	return starlark.String(ip)
-}
-
-// Proto returns the protocol
-func (r *Request) Proto() starlark.String {
-	return starlark.String(r.Request.Proto)
-}
-
-// Headers returns the request headers as a Starlark dict
-func (r *Request) Headers() *starlark.Dict {
-	headers := starlark.NewDict(len(r.Request.Header))
-	for name, values := range r.Request.Header {
-		if len(values) == 1 {
-			headers.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
-		}
-	}
-	return headers
-}
-
-// Query returns the query parameters as a Starlark dict
-func (r *Request) Query() *starlark.Dict {
-	query := starlark.NewDict(len(r.Request.URL.Query()))
-	for name, values := range r.Request.URL.Query() {
-		if len(values) == 1 {
-			query.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			query.SetKey(starlark.String(name), starlark.NewList(valueList))
-		}
-	}
-	return query
-}
-
-// Context returns the request context for middleware data
-func (r *Request) Context() *starlark.Dict {
-	ctx := starlark.NewDict(len(r.context))
-	for key, value := range r.context {
-		starlarkValue, err := dataconv.Marshal(value)
-		if err == nil {
-			ctx.SetKey(starlark.String(key), starlarkValue)
-		}
-	}
-	return ctx
 }
 
 // Body returns the raw request body
@@ -198,41 +185,43 @@ func (r *Request) JSON(thread *starlark.Thread, b *starlark.Builtin, args starla
 func (r *Request) Form(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if r.parsedForm != nil {
 		// Return cached result
-		form := starlark.NewDict(len(r.parsedForm))
-		for name, values := range r.parsedForm {
+		formDict := starlark.NewDict(len(r.parsedForm))
+		for key, values := range r.parsedForm {
 			if len(values) == 1 {
-				form.SetKey(starlark.String(name), starlark.String(values[0]))
+				formDict.SetKey(starlark.String(key), starlark.String(values[0]))
 			} else {
 				valueList := make([]starlark.Value, len(values))
 				for i, v := range values {
 					valueList[i] = starlark.String(v)
 				}
-				form.SetKey(starlark.String(name), starlark.NewList(valueList))
+				formDict.SetKey(starlark.String(key), starlark.NewList(valueList))
 			}
 		}
-		return form, nil
+		return formDict, nil
 	}
 
+	// Parse form
 	if err := r.Request.ParseForm(); err != nil {
 		return starlark.None, err
 	}
 
 	r.parsedForm = r.Request.Form
 
-	form := starlark.NewDict(len(r.parsedForm))
-	for name, values := range r.parsedForm {
+	// Convert to Starlark dict
+	formDict := starlark.NewDict(len(r.parsedForm))
+	for key, values := range r.parsedForm {
 		if len(values) == 1 {
-			form.SetKey(starlark.String(name), starlark.String(values[0]))
+			formDict.SetKey(starlark.String(key), starlark.String(values[0]))
 		} else {
 			valueList := make([]starlark.Value, len(values))
 			for i, v := range values {
 				valueList[i] = starlark.String(v)
 			}
-			form.SetKey(starlark.String(name), starlark.NewList(valueList))
+			formDict.SetKey(starlark.String(key), starlark.NewList(valueList))
 		}
 	}
 
-	return form, nil
+	return formDict, nil
 }
 
 // Files parses multipart form files
@@ -375,7 +364,7 @@ func (r *Request) SetParam(name, value string) {
 	r.params[name] = value
 }
 
-// SetContext sets a context value (used by middleware)
+// SetContext sets a value in the request context
 func (r *Request) SetContext(key string, value interface{}) {
 	r.context[key] = value
 }

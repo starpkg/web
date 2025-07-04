@@ -13,6 +13,7 @@ import (
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // SessionManager manages user sessions
@@ -334,4 +335,145 @@ func (sm *SessionManager) Configure(thread *starlark.Thread, b *starlark.Builtin
 	sm.maxAge = int(maxAgeInt)
 
 	return starlark.None, nil
+}
+
+// Add new methods for session cookie integration
+
+// applySessionCookie applies the session cookie to the response if needed
+func (s *Session) applySessionCookie(resp *Response) {
+	// Get the session cookie from the request context
+	if s.request != nil && s.data.IsNew {
+		// Create a cookie for the session
+		cookie := &http.Cookie{
+			Name:     s.manager.cookieName,
+			Value:    s.data.ID,
+			Path:     "/",
+			MaxAge:   s.manager.maxAge,
+			HttpOnly: true,
+			Secure:   s.request.Request.TLS != nil,
+			SameSite: http.SameSiteLaxMode,
+		}
+
+		// Make sure the response has headers
+		if resp.Headers == nil {
+			resp.Headers = make(http.Header)
+		}
+
+		// Add the cookie to the response
+		resp.Headers["Set-Cookie"] = append(resp.Headers["Set-Cookie"], cookie.String())
+	}
+}
+
+// Add a middleware creator method to the SessionManager
+
+// Middleware creates a middleware function for session handling
+func (sm *SessionManager) Middleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	sessionMiddlewareFunc := func(req *Request, next NextFunc) *Response {
+		// Get session for this request
+		session := sm.getSession(req)
+
+		// Make session available in request context
+		req.SetContext("session", session)
+
+		// Process request
+		response := next(req)
+
+		// Save session and apply cookie if needed
+		session.applySessionCookie(response)
+
+		return response
+	}
+
+	// Return a Starlark builtin that implements the middleware
+	return starlark.NewBuiltin("session_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var req, nextHandler starlark.Value
+
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+			"request", &req,
+			"next_handler", &nextHandler,
+		); err != nil {
+			return starlark.None, err
+		}
+
+		// Convert request to Go type
+		goReq, err := dataconv.Unmarshal(req)
+		if err != nil {
+			return starlark.None, fmt.Errorf("invalid request object: %v", err)
+		}
+
+		request, ok := goReq.(*Request)
+		if !ok {
+			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
+		}
+
+		// Create next_handler wrapper
+		nextFunc := func(r *Request) *Response {
+			// Call the Starlark next_handler
+			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
+			if err != nil {
+				return &Response{
+					StatusCode: 500,
+					Headers:    make(http.Header),
+					Body:       fmt.Sprintf("Next handler error: %v", err),
+				}
+			}
+
+			// Convert result to Response
+			respObj, err := dataconv.Unmarshal(result)
+			if err != nil {
+				return &Response{
+					StatusCode: 500,
+					Headers:    make(http.Header),
+					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+				}
+			}
+
+			if resp, ok := respObj.(*Response); ok {
+				return resp
+			}
+
+			return &Response{
+				StatusCode: 500,
+				Headers:    make(http.Header),
+				Body:       "Next handler returned invalid response type",
+			}
+		}
+
+		// Call the actual middleware function
+		response := sessionMiddlewareFunc(request, nextFunc)
+
+		// Marshal response back to Starlark
+		result, err := dataconv.Marshal(response)
+		if err != nil {
+			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+		}
+
+		return result, nil
+	}), nil
+}
+
+// Update the SessionManager's Struct method to include the middleware method
+
+// Struct returns a Starlark struct representation of the SessionManager
+func (sm *SessionManager) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"get_session": starlark.NewBuiltin("get_session", sm.GetSession),
+		"configure":   starlark.NewBuiltin("configure", sm.Configure),
+		"middleware":  starlark.NewBuiltin("middleware", sm.Middleware),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("SessionManager"), sd)
+}
+
+// Add a goroutine to periodically clean up expired sessions
+
+// StartCleanupTask starts a background task to clean up expired sessions
+func (sm *SessionManager) StartCleanupTask() {
+	go func() {
+		ticker := time.NewTicker(10 * time.Minute) // Run cleanup every 10 minutes
+		defer ticker.Stop()
+
+		for range ticker.C {
+			sm.cleanupExpiredSessions()
+		}
+	}()
 }

@@ -3,12 +3,14 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // Router handles HTTP routing
@@ -33,6 +35,13 @@ type StaticRoute struct {
 	Index     string
 }
 
+// SPARoute represents a Single Page Application route
+type SPARoute struct {
+	URLPath   string
+	Directory string
+	Fallback  string
+}
+
 // HandlerFunc represents a route handler function
 type HandlerFunc func(*Request) *Response
 
@@ -41,6 +50,12 @@ type MiddlewareFunc func(*Request, NextFunc) *Response
 
 // NextFunc represents the next function in middleware chain
 type NextFunc func(*Request) *Response
+
+// RouteGroup represents a group of routes with a common prefix
+type RouteGroup struct {
+	server *Server
+	prefix string
+}
 
 // NewRouter creates a new router instance
 func NewRouter() *Router {
@@ -113,6 +128,58 @@ func (router *Router) AddStaticRoute(urlPath, directory, index string) {
 		Directory: directory,
 		Index:     index,
 	}
+}
+
+// AddSPARoute registers a Single Page Application route
+func (router *Router) AddSPARoute(urlPath, directory, fallback string) {
+	// Add handler for the SPA route
+	handlerFunc := func(req *Request) *Response {
+		// Get path relative to the URL path
+		path := req.Request.URL.Path
+
+		// Strip the URL path prefix
+		if strings.HasPrefix(path, urlPath) {
+			path = strings.TrimPrefix(path, urlPath)
+		}
+
+		// Ensure path starts with /
+		if !strings.HasPrefix(path, "/") {
+			path = "/" + path
+		}
+
+		// Try to serve the file
+		filePath := filepath.Join(directory, path)
+		if _, err := os.Stat(filePath); err == nil {
+			// File exists, serve it
+			return &Response{
+				StatusCode: http.StatusOK,
+				Headers:    make(http.Header),
+				FilePath:   filePath,
+			}
+		}
+
+		// File not found, serve the fallback
+		fallbackPath := filepath.Join(directory, fallback)
+		return &Response{
+			StatusCode: http.StatusOK,
+			Headers:    make(http.Header),
+			FilePath:   fallbackPath,
+		}
+	}
+
+	// Add a wildcard route for the SPA
+	tree, exists := router.routes["GET"]
+	if !exists {
+		tree = &RouteTree{
+			exact: make(map[string]HandlerFunc),
+			param: make(map[string]*RouteTree),
+		}
+		router.routes["GET"] = tree
+	}
+
+	// Add the SPA handler for the URL path and all sub-paths
+	spaPath := strings.TrimSuffix(urlPath, "/") + "/{*path}"
+	router.addToTree(tree, spaPath, handlerFunc)
 }
 
 // addToTree adds a route to the route tree
@@ -299,4 +366,294 @@ func (router *Router) serveStatic(req *Request, staticRoute *StaticRoute, reques
 		Headers:    make(http.Header),
 		FilePath:   fullPath,
 	}
+}
+
+// NewRouteGroup creates a new route group
+func NewRouteGroup(server *Server, prefix string) *RouteGroup {
+	// Ensure prefix starts with a / and doesn't end with one
+	if !strings.HasPrefix(prefix, "/") {
+		prefix = "/" + prefix
+	}
+	prefix = strings.TrimSuffix(prefix, "/")
+
+	return &RouteGroup{
+		server: server,
+		prefix: prefix,
+	}
+}
+
+// Struct returns a Starlark struct representation of the RouteGroup
+func (rg *RouteGroup) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"route":   starlark.NewBuiltin("route", rg.Route),
+		"get":     starlark.NewBuiltin("get", rg.Get),
+		"post":    starlark.NewBuiltin("post", rg.Post),
+		"put":     starlark.NewBuiltin("put", rg.Put),
+		"delete":  starlark.NewBuiltin("delete", rg.Delete),
+		"patch":   starlark.NewBuiltin("patch", rg.Patch),
+		"options": starlark.NewBuiltin("options", rg.Options),
+		"head":    starlark.NewBuiltin("head", rg.Head),
+		"use":     starlark.NewBuiltin("use", rg.Use),
+		"static":  starlark.NewBuiltin("static", rg.Static),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("RouteGroup"), sd)
+}
+
+// Route registers a route with the group
+func (rg *RouteGroup) Route(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		method  starlark.Value
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"method", &method,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Route method
+	_, err := rg.server.Route(thread, b, starlark.Tuple{method, fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Get registers a GET route
+func (rg *RouteGroup) Get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Get method
+	_, err := rg.server.Get(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Post registers a POST route
+func (rg *RouteGroup) Post(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Post method
+	_, err := rg.server.Post(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Put registers a PUT route
+func (rg *RouteGroup) Put(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Put method
+	_, err := rg.server.Put(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Delete registers a DELETE route
+func (rg *RouteGroup) Delete(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Delete method
+	_, err := rg.server.Delete(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Patch registers a PATCH route
+func (rg *RouteGroup) Patch(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Patch method
+	_, err := rg.server.Patch(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Options registers an OPTIONS route
+func (rg *RouteGroup) Options(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Options method
+	_, err := rg.server.Options(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Head registers a HEAD route
+func (rg *RouteGroup) Head(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		path    starlark.String
+		handler starlark.Callable
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"path", &path,
+		"handler", &handler,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
+
+	// Call the server's Head method
+	_, err := rg.server.Head(thread, b, starlark.Tuple{fullPath, handler}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Use adds middleware to the route group
+func (rg *RouteGroup) Use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var middlewareFunc starlark.Callable
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "middleware", &middlewareFunc); err != nil {
+		return starlark.None, err
+	}
+
+	// Create path pattern for this group
+	pattern := rg.prefix + "/*"
+
+	// Call server's UseFor method
+	pathPattern := starlark.String(pattern)
+	_, err := rg.server.UseFor(thread, b, starlark.Tuple{pathPattern, middlewareFunc}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
+}
+
+// Static adds a static file route
+func (rg *RouteGroup) Static(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		urlPath   starlark.String
+		directory starlark.String
+		index     = starlark.String("index.html")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"url_path", &urlPath,
+		"directory", &directory,
+		"index?", &index,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Prepend prefix to path
+	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(urlPath.GoString(), "/"))
+
+	// Call server's Static method
+	_, err := rg.server.Static(thread, b, starlark.Tuple{fullPath, directory, index}, nil)
+	if err != nil {
+		return starlark.None, err
+	}
+
+	return starlark.None, nil
 }

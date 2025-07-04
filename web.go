@@ -130,6 +130,7 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", timingMiddleware),
 		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", compressionMiddleware),
 		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", securityHeadersMiddleware),
+		"session_middleware":          starlark.NewBuiltin(ModuleName+".session_middleware", m.sessionMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
@@ -195,6 +196,10 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 	}
 
 	sessionManager := NewSessionManager(secret.GoString(), cookieName.GoString(), int(maxAgeInt))
+
+	// Start the cleanup task for expired sessions
+	sessionManager.StartCleanupTask()
+
 	result, err := dataconv.Marshal(sessionManager)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal session manager: %v", err)
@@ -562,4 +567,34 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 	}
 
 	return auth.Struct(), nil
+}
+
+// sessionMiddleware creates a session middleware
+func (m *Module) sessionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var sessionManager starlark.Value
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"session_manager", &sessionManager,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Extract session manager from Starlark value
+	goSessionManager, err := dataconv.Unmarshal(sessionManager)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to unmarshal session manager: %v", err)
+	}
+
+	sm, ok := goSessionManager.(*SessionManager)
+	if !ok {
+		return starlark.None, fmt.Errorf("expected SessionManager, got %T", goSessionManager)
+	}
+
+	// Create the middleware
+	middleware, err := sm.Middleware(thread, nil, nil, nil)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to create session middleware: %v", err)
+	}
+
+	return middleware, nil
 }
