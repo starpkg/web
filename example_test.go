@@ -122,7 +122,7 @@ main()
 `
 
 	// Create machine with web module
-	machine := starlet.NewDefault()
+	machine := starlet.NewWithNames(starlet.StringAnyMap{}, []string{"go_idiomatic"}, []string{})
 	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		fmt.Println(msg)
 	})

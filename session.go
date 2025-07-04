@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -67,9 +68,9 @@ func (sm *SessionManager) GetSession(thread *starlark.Thread, b *starlark.Builti
 
 	if req, ok := goValue.(*Request); ok {
 		session := sm.getSession(req)
-		result, err := dataconv.Marshal(session)
+		result, err := convert.ToValue(session)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal session: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert session: %v", err)
 		}
 		return result, nil
 	}
@@ -237,7 +238,7 @@ func (s *Session) Get(thread *starlark.Thread, b *starlark.Builtin, args starlar
 	defer s.manager.mu.RUnlock()
 
 	if value, exists := s.data.Data[key.GoString()]; exists {
-		starlarkValue, err := dataconv.Marshal(value)
+		starlarkValue, err := convert.ToValue(value)
 		if err != nil {
 			return defaultValue, nil
 		}
@@ -442,10 +443,10 @@ func (sm *SessionManager) Middleware(thread *starlark.Thread, b *starlark.Builti
 		// Call the actual middleware function
 		response := sessionMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil

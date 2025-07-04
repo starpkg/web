@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 )
 
@@ -66,13 +67,13 @@ func applyMiddleware(handler HandlerFunc, middleware MiddlewareFunc) HandlerFunc
 
 // callStarlarkMiddleware calls a Starlark middleware function
 func callStarlarkMiddleware(thread *starlark.Thread, middleware starlark.Callable, req *Request, next NextFunc) (*Response, error) {
-	// Marshal request to Starlark
-	reqValue, err := dataconv.Marshal(req)
+	// Convert request to Starlark
+	reqValue, err := convert.ToValue(req)
 	if err != nil {
 		return &Response{
 			StatusCode: 500,
 			Headers:    make(http.Header),
-			Body:       fmt.Sprintf("Failed to marshal request for middleware: %v", err),
+			Body:       fmt.Sprintf("Failed to convert request for middleware: %v", err),
 		}, err
 	}
 
@@ -87,9 +88,9 @@ func callStarlarkMiddleware(thread *starlark.Thread, middleware starlark.Callabl
 
 			if modReq, ok := modifiedReq.(*Request); ok {
 				response := next(modReq)
-				respValue, err := dataconv.Marshal(response)
+				respValue, err := convert.ToValue(response)
 				if err != nil {
-					return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+					return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 				}
 				return respValue, nil
 			}
@@ -98,9 +99,9 @@ func callStarlarkMiddleware(thread *starlark.Thread, middleware starlark.Callabl
 
 		// Default: call next with original request
 		response := next(req)
-		respValue, err := dataconv.Marshal(response)
+		respValue, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 		return respValue, nil
 	})
@@ -323,10 +324,10 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 		// Call the actual middleware function
 		response := corsMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil
@@ -472,10 +473,10 @@ func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starla
 		// Call the actual middleware function
 		response := loggingMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil
@@ -582,10 +583,10 @@ func timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlar
 		// Call the actual middleware function
 		response := timingMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil
@@ -760,10 +761,10 @@ func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args st
 		// Call the actual middleware function
 		response := compressionMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil
@@ -895,10 +896,10 @@ func securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, arg
 		// Call the actual middleware function
 		response := securityHeadersMiddlewareFunc(request, nextFunc)
 
-		// Marshal response back to Starlark
-		result, err := dataconv.Marshal(response)
+		// Convert response back to Starlark
+		result, err := convert.ToValue(response)
 		if err != nil {
-			return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
 		}
 
 		return result, nil

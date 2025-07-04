@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -108,7 +109,7 @@ func (ba *BasicAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, ar
 		return next(req)
 	}
 
-	result, err := dataconv.Marshal(middleware)
+	result, err := convert.ToValue(middleware)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal basic auth middleware: %v", err)
 	}
@@ -147,7 +148,7 @@ func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 		realm: realm.GoString(),
 	}
 
-	result, err := dataconv.Marshal(basicAuth)
+	result, err := convert.ToValue(basicAuth)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal basic auth: %v", err)
 	}
@@ -241,7 +242,7 @@ func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, a
 		return next(req)
 	}
 
-	result, err := dataconv.Marshal(middleware)
+	result, err := convert.ToValue(middleware)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal bearer auth middleware: %v", err)
 	}
@@ -262,7 +263,7 @@ func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		validateFunc: validateFunc,
 	}
 
-	result, err := dataconv.Marshal(bearerAuth)
+	result, err := convert.ToValue(bearerAuth)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal bearer auth: %v", err)
 	}
@@ -347,7 +348,7 @@ func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, 
 		return next(req)
 	}
 
-	result, err := dataconv.Marshal(middleware)
+	result, err := convert.ToValue(middleware)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal API key auth middleware: %v", err)
 	}
@@ -384,7 +385,7 @@ func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		header: header.GoString(),
 	}
 
-	result, err := dataconv.Marshal(apiKeyAuth)
+	result, err := convert.ToValue(apiKeyAuth)
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to marshal API key auth: %v", err)
 	}

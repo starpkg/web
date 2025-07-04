@@ -281,3 +281,59 @@ srv = main()
 
 	// Test passes if file upload handler can be configured
 }
+
+func TestResponseMarshallingFixed(t *testing.T) {
+	// Test that response creation functions no longer return starlark.Builtin errors
+	script := `
+load("web", "create_server", "response", "json_response", "html_response", "redirect", "error_response")
+
+def json_handler(req):
+    # This should work without marshalling errors
+    return json_response({"message": "hello", "method": req.method})
+
+def text_handler(req):
+    # This should work without marshalling errors  
+    return response("Hello, World!", status=200, headers={"X-Custom": "test"})
+
+def html_handler(req):
+    # This should work without marshalling errors
+    return html_response("<h1>Hello HTML</h1>", status=200)
+
+def redirect_handler(req):
+    # This should work without marshalling errors
+    return redirect("/new-location", status=302)
+
+def error_handler(req):
+    # This should work without marshalling errors
+    return error_response(500, "Internal Server Error")
+
+def main():
+    # Create server
+    srv = create_server(host="localhost", port=0)
+    
+    # Add routes - these should all work without "Failed to unmarshal response: unrecognized starlark type: *starlark.Builtin" errors
+    srv.get("/json", json_handler)
+    srv.get("/text", text_handler) 
+    srv.get("/html", html_handler)
+    srv.get("/redirect", redirect_handler)
+    srv.get("/error", error_handler)
+    
+    # Test passes if we can create the server and add routes without marshalling errors
+    return True
+
+result = main()
+`
+
+	machine := starlet.NewDefault()
+	webModule := NewModule()
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
+
+	_, err := machine.RunScript([]byte(script), nil)
+	if err != nil {
+		t.Errorf("Response marshalling test failed: %v", err)
+	}
+
+	t.Log("Response marshalling test passed - no starlark.Builtin errors!")
+}

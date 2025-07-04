@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -546,10 +547,10 @@ func (s *Server) Group(thread *starlark.Thread, b *starlark.Builtin, args starla
 	// Create a new RouteGroup
 	group := NewRouteGroup(s, prefix.GoString())
 
-	// Marshal to Starlark
-	result, err := dataconv.Marshal(group)
+	// Convert to Starlark value
+	result, err := convert.ToValue(group)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal route group: %v", err)
+		return starlark.None, fmt.Errorf("failed to convert route group: %v", err)
 	}
 
 	return result, nil
@@ -594,11 +595,11 @@ func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args
 	// Wrap the handler
 	handlerFunc := func(req *Request) *Response {
 		// Call the handler
-		reqValue, err := dataconv.Marshal(req)
+		reqValue, err := convert.ToValue(req)
 		if err != nil {
 			return &Response{
 				StatusCode: 500,
-				Body:       fmt.Sprintf("Failed to marshal request: %v", err),
+				Body:       fmt.Sprintf("Failed to convert request: %v", err),
 			}
 		}
 
@@ -663,24 +664,24 @@ func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args
 // Struct returns a Starlark struct representation of the Server
 func (s *Server) Struct() *starlarkstruct.Struct {
 	sd := starlark.StringDict{
-		"route":            starlark.NewBuiltin("route", s.Route),
-		"get":              starlark.NewBuiltin("get", s.Get),
-		"post":             starlark.NewBuiltin("post", s.Post),
-		"put":              starlark.NewBuiltin("put", s.Put),
-		"delete":           starlark.NewBuiltin("delete", s.Delete),
-		"patch":            starlark.NewBuiltin("patch", s.Patch),
-		"options":          starlark.NewBuiltin("options", s.Options),
-		"head":             starlark.NewBuiltin("head", s.Head),
-		"use":              starlark.NewBuiltin("use", s.Use),
-		"use_for":          starlark.NewBuiltin("use_for", s.UseFor),
-		"group":            starlark.NewBuiltin("group", s.Group),
-		"static":           starlark.NewBuiltin("static", s.Static),
-		"spa":              starlark.NewBuiltin("spa", s.SPA),
-		"error_handler":    starlark.NewBuiltin("error_handler", s.ErrorHandler),
-		"run":              starlark.NewBuiltin("run", s.Run),
-		"start_background": starlark.NewBuiltin("start_background", s.StartBackground),
-		"stop":             starlark.NewBuiltin("stop", s.Stop),
-		"is_running":       starlark.NewBuiltin("is_running", s.IsRunning),
+		"route":         starlark.NewBuiltin("route", s.Route),
+		"get":           starlark.NewBuiltin("get", s.Get),
+		"post":          starlark.NewBuiltin("post", s.Post),
+		"put":           starlark.NewBuiltin("put", s.Put),
+		"delete":        starlark.NewBuiltin("delete", s.Delete),
+		"patch":         starlark.NewBuiltin("patch", s.Patch),
+		"options":       starlark.NewBuiltin("options", s.Options),
+		"head":          starlark.NewBuiltin("head", s.Head),
+		"use":           starlark.NewBuiltin("use", s.Use),
+		"use_for":       starlark.NewBuiltin("use_for", s.UseFor),
+		"group":         starlark.NewBuiltin("group", s.Group),
+		"static":        starlark.NewBuiltin("static", s.Static),
+		"spa":           starlark.NewBuiltin("spa", s.SPA),
+		"error_handler": starlark.NewBuiltin("error_handler", s.ErrorHandler),
+		"run":           starlark.NewBuiltin("run", s.Run),
+		"start":         starlark.NewBuiltin("start", s.StartBackground),
+		"stop":          starlark.NewBuiltin("stop", s.Stop),
+		"is_running":    starlark.NewBuiltin("is_running", s.IsRunning),
 	}
 	return starlarkstruct.FromStringDict(starlark.String("Server"), sd)
 }

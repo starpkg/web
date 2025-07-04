@@ -11,7 +11,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -76,7 +76,7 @@ func (r *Request) Struct() *starlarkstruct.Struct {
 	// Create context dict
 	ctx := starlark.NewDict(len(r.context))
 	for key, value := range r.context {
-		starlarkValue, err := dataconv.Marshal(value)
+		starlarkValue, err := convert.ToValue(value)
 		if err == nil {
 			ctx.SetKey(starlark.String(key), starlarkValue)
 		}
@@ -153,7 +153,7 @@ func (r *Request) Body(thread *starlark.Thread, b *starlark.Builtin, args starla
 func (r *Request) JSON(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if r.parsedBody != nil {
 		// Return cached result
-		return dataconv.Marshal(r.parsedBody)
+		return convert.ToValue(r.parsedBody)
 	}
 
 	if r.Request.Body == nil {
@@ -178,7 +178,7 @@ func (r *Request) JSON(thread *starlark.Thread, b *starlark.Builtin, args starla
 	}
 
 	r.parsedBody = jsonData
-	return dataconv.Marshal(jsonData)
+	return convert.ToValue(jsonData)
 }
 
 // Form parses form data
