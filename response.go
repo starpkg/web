@@ -28,12 +28,26 @@ func NewResponse(statusCode int, body string) *Response {
 
 // Struct returns a Starlark struct representation of the Response
 func (r *Response) Struct() *starlarkstruct.Struct {
+	// Create headers dict
+	headers := starlark.NewDict(len(r.Headers))
+	for name, values := range r.Headers {
+		if len(values) == 1 {
+			headers.SetKey(starlark.String(name), starlark.String(values[0]))
+		} else {
+			valueList := make([]starlark.Value, len(values))
+			for i, v := range values {
+				valueList[i] = starlark.String(v)
+			}
+			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
+		}
+	}
+
 	sd := starlark.StringDict{
+		"status_code":   starlark.MakeInt(r.StatusCode),
+		"headers":       headers,
+		"body":          starlark.String(r.Body),
 		"set_cookie":    starlark.NewBuiltin("set_cookie", r.SetCookie),
 		"delete_cookie": starlark.NewBuiltin("delete_cookie", r.DeleteCookie),
-		"status_code":   starlark.MakeInt(r.StatusCode),
-		"headers":       r.GetHeaders(),
-		"body":          r.GetBody(),
 	}
 	return starlarkstruct.FromStringDict(starlark.String("Response"), sd)
 }
@@ -117,22 +131,4 @@ func (r *Response) DeleteCookie(thread *starlark.Thread, b *starlark.Builtin, ar
 // GetStatusCode returns the status code
 func (r *Response) GetStatusCode() starlark.Int {
 	return starlark.MakeInt(r.StatusCode)
-}
-
-// GetHeaders returns the response headers as a Starlark dict
-func (r *Response) GetHeaders() *starlark.Dict {
-	headers := starlark.NewDict(len(r.Headers))
-	for k, v := range r.Headers {
-		list := make([]starlark.Value, len(v))
-		for i, val := range v {
-			list[i] = starlark.String(val)
-		}
-		headers.SetKey(starlark.String(k), starlark.NewList(list))
-	}
-	return headers
-}
-
-// GetBody returns the response body as a Starlark string
-func (r *Response) GetBody() starlark.Value {
-	return starlark.String(r.Body)
 }

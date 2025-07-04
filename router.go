@@ -18,6 +18,7 @@ type Router struct {
 	routes       map[string]*RouteTree
 	staticRoutes map[string]*StaticRoute
 	paramRegex   *regexp.Regexp
+	server       *Server // Add reference to server for error handling
 }
 
 // RouteTree represents a route tree for efficient matching
@@ -63,7 +64,13 @@ func NewRouter() *Router {
 		routes:       make(map[string]*RouteTree),
 		staticRoutes: make(map[string]*StaticRoute),
 		paramRegex:   regexp.MustCompile(`\{([^}]+)\}`),
+		server:       nil, // Will be set by server
 	}
+}
+
+// SetServer sets the server reference for error handling
+func (router *Router) SetServer(server *Server) {
+	router.server = server
 }
 
 // AddRoute registers a new route
@@ -248,20 +255,12 @@ func (router *Router) ServeHTTP(req *Request) *Response {
 	// Check dynamic routes
 	tree, exists := router.routes[method]
 	if !exists {
-		return &Response{
-			StatusCode: 404,
-			Headers:    make(http.Header),
-			Body:       "Not Found",
-		}
+		return router.createErrorResponse(req, 404, "Not Found")
 	}
 
 	handler, params := router.matchRoute(tree, path)
 	if handler == nil {
-		return &Response{
-			StatusCode: 404,
-			Headers:    make(http.Header),
-			Body:       "Not Found",
-		}
+		return router.createErrorResponse(req, 404, "Not Found")
 	}
 
 	// Set path parameters
@@ -341,23 +340,23 @@ func (router *Router) serveStatic(req *Request, staticRoute *StaticRoute, reques
 
 	// Prevent directory traversal
 	if strings.Contains(filePath, "..") {
-		return &Response{
-			StatusCode: 403,
-			Headers:    make(http.Header),
-			Body:       "Forbidden",
-		}
+		return router.createErrorResponse(req, 403, "Forbidden")
 	}
 
 	// Build full file path
 	fullPath := filepath.Join(staticRoute.Directory, filePath)
 
-	// Check if file exists
-	if _, err := filepath.Abs(fullPath); err != nil {
-		return &Response{
-			StatusCode: 404,
-			Headers:    make(http.Header),
-			Body:       "Not Found",
+	// Check if file exists and is readable
+	if stat, err := os.Stat(fullPath); err != nil {
+		// File doesn't exist or can't be accessed
+		return router.createErrorResponse(req, 404, "Not Found")
+	} else if stat.IsDir() {
+		// If it's a directory, try to serve index file
+		indexPath := filepath.Join(fullPath, staticRoute.Index)
+		if _, err := os.Stat(indexPath); err != nil {
+			return router.createErrorResponse(req, 404, "Not Found")
 		}
+		fullPath = indexPath
 	}
 
 	// Return file response
@@ -656,4 +655,21 @@ func (rg *RouteGroup) Static(thread *starlark.Thread, b *starlark.Builtin, args 
 	}
 
 	return starlark.None, nil
+}
+
+// createErrorResponse creates an error response, using custom error handlers if available
+func (router *Router) createErrorResponse(req *Request, statusCode int, defaultMessage string) *Response {
+	// If we have a server reference and it has custom error handlers, use them
+	if router.server != nil {
+		if errorHandler, exists := router.server.errorHandlers[statusCode]; exists {
+			return errorHandler(req)
+		}
+	}
+
+	// Fall back to default error response
+	return &Response{
+		StatusCode: statusCode,
+		Headers:    make(http.Header),
+		Body:       defaultMessage,
+	}
 }

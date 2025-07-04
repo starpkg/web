@@ -228,58 +228,53 @@ func (r *Request) Form(thread *starlark.Thread, b *starlark.Builtin, args starla
 func (r *Request) Files(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if r.parsedFiles != nil {
 		// Return cached result
-		files := starlark.NewDict(len(r.parsedFiles))
+		filesDict := starlark.NewDict(len(r.parsedFiles))
 		for name, file := range r.parsedFiles {
-			fileValue, err := dataconv.Marshal(file)
-			if err != nil {
-				continue // Skip files that can't be marshaled
-			}
-			files.SetKey(starlark.String(name), fileValue)
+			filesDict.SetKey(starlark.String(name), file.Struct())
 		}
-		return files, nil
+		return filesDict, nil
 	}
 
-	if err := r.Request.ParseMultipartForm(32 << 20); err != nil { // 32 MB
-		return starlark.NewDict(0), nil // Return empty dict if not multipart
+	if err := r.Request.ParseMultipartForm(32 << 20); err != nil { // 32MB max
+		return starlark.None, nil // Return None if not multipart form
+	}
+
+	if r.Request.MultipartForm == nil || r.Request.MultipartForm.File == nil {
+		return starlark.NewDict(0), nil
 	}
 
 	r.parsedFiles = make(map[string]*FileUpload)
+	for name, fileHeaders := range r.Request.MultipartForm.File {
+		if len(fileHeaders) > 0 {
+			fileHeader := fileHeaders[0] // Take the first file
 
-	if r.Request.MultipartForm != nil {
-		for name, fileHeaders := range r.Request.MultipartForm.File {
-			if len(fileHeaders) > 0 {
-				fh := fileHeaders[0] // Take the first file
-				file, err := fh.Open()
-				if err != nil {
-					continue
-				}
-				defer file.Close()
+			file, err := fileHeader.Open()
+			if err != nil {
+				continue
+			}
+			defer file.Close()
 
-				content, err := io.ReadAll(file)
-				if err != nil {
-					continue
-				}
+			content, err := io.ReadAll(file)
+			if err != nil {
+				continue
+			}
 
-				r.parsedFiles[name] = &FileUpload{
-					Filename:    fh.Filename,
-					ContentType: fh.Header.Get("Content-Type"),
-					Size:        fh.Size,
-					content:     content,
-				}
+			r.parsedFiles[name] = &FileUpload{
+				Filename:    fileHeader.Filename,
+				ContentType: fileHeader.Header.Get("Content-Type"),
+				Size:        int64(len(content)),
+				content:     content,
 			}
 		}
 	}
 
-	files := starlark.NewDict(len(r.parsedFiles))
+	// Convert to Starlark dict
+	filesDict := starlark.NewDict(len(r.parsedFiles))
 	for name, file := range r.parsedFiles {
-		fileValue, err := dataconv.Marshal(file)
-		if err != nil {
-			continue // Skip files that can't be marshaled
-		}
-		files.SetKey(starlark.String(name), fileValue)
+		filesDict.SetKey(starlark.String(name), file.Struct())
 	}
 
-	return files, nil
+	return filesDict, nil
 }
 
 // Cookie returns a cookie value
@@ -412,4 +407,17 @@ func (f *FileUpload) Save(thread *starlark.Thread, b *starlark.Builtin, args sta
 	}
 
 	return starlark.None, nil
+}
+
+// Struct returns a Starlark struct representation of the FileUpload
+func (f *FileUpload) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"filename":     starlark.String(f.Filename),
+		"content_type": starlark.String(f.ContentType),
+		"size":         starlark.MakeInt64(f.Size),
+		"read":         starlark.NewBuiltin("read", f.Read),
+		"read_bytes":   starlark.NewBuiltin("read_bytes", f.ReadBytes),
+		"save":         starlark.NewBuiltin("save", f.Save),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("FileUpload"), sd)
 }

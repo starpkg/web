@@ -3,6 +3,7 @@ package web
 
 import (
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/1set/starlet"
@@ -75,7 +76,7 @@ func genConfigOption[T any](name, description string, defaultValue T) *base.Conf
 	return base.NewConfigOption(defaultValue).
 		WithName(name).
 		WithDescription(description).
-		WithEnvVar(fmt.Sprintf("WEB_%s", name))
+		WithEnvVar(fmt.Sprintf("WEB_%s", strings.ToUpper(strings.ReplaceAll(name, "_", "_"))))
 }
 
 // newModuleWithOptions creates a Module with the given configuration options
@@ -156,6 +157,20 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, fmt.Errorf("port must be an integer")
 	}
 
+	// Get CORS origins - implement workaround for string slice
+	corsOriginsStr := m.ext.GetString(configKeyCORSOrigins, "*")
+	var corsOrigins []string
+	if corsOriginsStr == "*" {
+		corsOrigins = []string{"*"}
+	} else {
+		// Parse comma-separated values
+		parts := strings.Split(corsOriginsStr, ",")
+		corsOrigins = make([]string, len(parts))
+		for i, part := range parts {
+			corsOrigins[i] = strings.TrimSpace(part)
+		}
+	}
+
 	// Create server configuration
 	config := &ServerConfig{
 		Host:              host.GoString(),
@@ -164,7 +179,7 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		WriteTimeout:      time.Duration(m.ext.GetInt(configKeyWriteTimeout, 30)) * time.Second,
 		MaxBodySize:       int64(m.ext.GetInt(configKeyMaxBodySize, 32*1024*1024)),
 		EnableCORS:        m.ext.GetBool(configKeyEnableCORS, false),
-		CORSOrigins:       []string{"*"}, // Default value since GetStringSlice is not available
+		CORSOrigins:       corsOrigins,
 		EnableCompression: m.ext.GetBool(configKeyEnableCompression, true),
 		StaticCacheMaxAge: m.ext.GetInt(configKeyStaticCacheMaxAge, 3600),
 	}
@@ -200,11 +215,8 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 	// Start the cleanup task for expired sessions
 	sessionManager.StartCleanupTask()
 
-	result, err := dataconv.Marshal(sessionManager)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal session manager: %v", err)
-	}
-	return result, nil
+	// Return the SessionManager's Struct directly instead of marshaling
+	return sessionManager.Struct(), nil
 }
 
 // response creates a basic HTTP response

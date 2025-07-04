@@ -477,3 +477,17 @@ func (sm *SessionManager) StartCleanupTask() {
 		}
 	}()
 }
+
+// Struct returns a Starlark struct representation of the Session
+func (s *Session) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"id":     starlark.NewBuiltin("id", s.ID),
+		"is_new": starlark.NewBuiltin("is_new", s.IsNew),
+		"get":    starlark.NewBuiltin("get", s.Get),
+		"set":    starlark.NewBuiltin("set", s.Set),
+		"delete": starlark.NewBuiltin("delete", s.Delete),
+		"clear":  starlark.NewBuiltin("clear", s.Clear),
+		"save":   starlark.NewBuiltin("save", s.Save),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("Session"), sd)
+}

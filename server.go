@@ -50,6 +50,9 @@ func NewServer(config *ServerConfig) *Server {
 		errorHandlers:  make(map[int]HandlerFunc),
 	}
 
+	// Set the router's server reference for error handling
+	server.router.SetServer(server)
+
 	// Create HTTP server
 	server.httpServer = &http.Server{
 		Addr:         fmt.Sprintf("%s:%d", config.Host, config.Port),
@@ -66,7 +69,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	// Create request wrapper
 	req := NewRequest(r)
 
-	// Build middleware chain
+	// Build middleware chain starting with the router
 	handler := s.router.ServeHTTP
 
 	// Apply path-specific middleware if any matches
@@ -77,26 +80,51 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		if err == nil && pathPattern.matches(path) {
 			// Apply middleware in reverse order (so they execute in the correct order)
 			for i := len(middlewares) - 1; i >= 0; i-- {
+				// Capture by value to fix closure issue
 				middleware := middlewares[i]
-				next := handler
-				handler = func(req *Request) *Response {
-					return middleware(req, next)
-				}
+				currentHandler := handler
+				handler = func(middleware MiddlewareFunc, next func(*Request) *Response) func(*Request) *Response {
+					return func(req *Request) *Response {
+						return middleware(req, next)
+					}
+				}(middleware, currentHandler)
 			}
 		}
 	}
 
 	// Apply global middleware in reverse order
 	for i := len(s.middleware) - 1; i >= 0; i-- {
+		// Capture by value to fix closure issue
 		middleware := s.middleware[i]
-		next := handler
-		handler = func(req *Request) *Response {
-			return middleware(req, next)
-		}
+		currentHandler := handler
+		handler = func(middleware MiddlewareFunc, next func(*Request) *Response) func(*Request) *Response {
+			return func(req *Request) *Response {
+				return middleware(req, next)
+			}
+		}(middleware, currentHandler)
 	}
 
-	// Execute the middleware chain
-	response := handler(req)
+	// Create a wrapper that can handle error responses
+	errorAwareHandler := func(req *Request) *Response {
+		response := handler(req)
+
+		// Check if we need to apply custom error handler
+		if errorHandler, exists := s.errorHandlers[response.StatusCode]; exists {
+			return errorHandler(req)
+		}
+
+		return response
+	}
+
+	// Execute the middleware chain with error handling
+	response := errorAwareHandler(req)
+
+	// Apply session cookies if session exists in context
+	if sessionInterface := req.GetContext("session"); sessionInterface != nil {
+		if session, ok := sessionInterface.(*Session); ok {
+			session.applySessionCookie(response)
+		}
+	}
 
 	// Write response
 	s.writeResponse(w, response)
