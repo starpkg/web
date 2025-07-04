@@ -56,7 +56,7 @@ main()
 
 ### Server Creation
 
-#### `create_server(host="localhost", port=8080, **config) -> Server`
+#### `create_server(host="localhost", port=8080) -> Server`
 
 Creates a new HTTP server instance with the specified configuration.
 
@@ -73,7 +73,7 @@ srv = create_server(
 
 ### Response Builders
 
-#### `response(body, status=200, headers={}) -> Response`
+#### `response(body="", status=200, headers={}) -> Response`
 
 Creates a basic HTTP response.
 
@@ -138,14 +138,14 @@ def protected_handler(req):
 
 ### File Operations
 
-#### `send_file(filepath, content_type=None) -> Response`
+#### `send_file(filepath, content_type="") -> Response`
 
 Sends a file from the filesystem.
 
 ```python
 def download_handler(req):
     filename = req.param("filename")
-    return send_file("files/{}.format(filename)")
+    return send_file("files/{}".format(filename))
 ```
 
 #### `send_data(data, filename, content_type="application/octet-stream") -> Response`
@@ -169,8 +169,8 @@ srv.post("/users", create_user)
 srv.put("/users/{id}", update_user)
 srv.delete("/users/{id}", delete_user)
 
-# Multiple methods
-srv.route(["GET", "HEAD"], "/info", info_handler)
+# Generic route method
+srv.route("GET", "/info", info_handler)
 srv.route("POST", "/webhook", webhook_handler)
 ```
 
@@ -527,23 +527,21 @@ export WEB_HOST="0.0.0.0"
 export WEB_PORT="8080"
 export WEB_READ_TIMEOUT="30"
 export WEB_WRITE_TIMEOUT="30"
-export WEB_MAX_BODY_SIZE="104857600"  # 100MB
+export WEB_MAX_BODY_SIZE="33554432"  # 32MB
 export WEB_ENABLE_CORS="true"
 export WEB_CORS_ORIGINS="https://example.com,https://app.example.com"
+export WEB_ENABLE_COMPRESSION="true"
+export WEB_STATIC_CACHE_MAX_AGE="3600"
 ```
 
 ### Server Configuration
 
 ```python
-# Custom server configuration
+# Server configuration is handled through environment variables
+# or by passing parameters to create_server()
 srv = create_server(
     host="0.0.0.0",
-    port=8080,
-    read_timeout=60,
-    write_timeout=60,
-    max_body_size=100*1024*1024,  # 100MB
-    enable_cors=True,
-    cors_origins=["https://example.com"]
+    port=8080
 )
 ```
 
