@@ -13,6 +13,16 @@ import (
 
 // Authentication implementations
 
+// authMiddlewareFactory creates a standardized authentication middleware builtin
+// This eliminates code duplication across different authentication types
+func authMiddlewareFactory(middlewareFunc MiddlewareFunc) (starlark.Value, error) {
+	result, err := convert.ToValue(middlewareFunc)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal auth middleware: %v", err)
+	}
+	return result, nil
+}
+
 // BasicAuth represents a basic authentication handler
 type BasicAuth struct {
 	users map[string]string
@@ -97,11 +107,7 @@ func (ba *BasicAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, ar
 		return next(req)
 	}
 
-	result, err := convert.ToValue(middleware)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal basic auth middleware: %v", err)
-	}
-	return result, nil
+	return authMiddlewareFactory(middleware)
 }
 
 // basic_auth creates a basic HTTP authentication handler
@@ -118,18 +124,8 @@ func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 		return starlark.None, err
 	}
 
-	// Convert users dict to Go map
-	usersMap := make(map[string]string)
-	if users != nil {
-		for _, item := range users.Items() {
-			key, value := item[0], item[1]
-			if keyStr, ok := key.(starlark.String); ok {
-				if valueStr, ok := value.(starlark.String); ok {
-					usersMap[keyStr.GoString()] = valueStr.GoString()
-				}
-			}
-		}
-	}
+	// Convert users dict to Go map using helper
+	usersMap := starlarkDictToStringMap(users)
 
 	basicAuth := &BasicAuth{
 		users: usersMap,
@@ -218,11 +214,7 @@ func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, a
 		return next(req)
 	}
 
-	result, err := convert.ToValue(middleware)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal bearer auth middleware: %v", err)
-	}
-	return result, nil
+	return authMiddlewareFactory(middleware)
 }
 
 // bearer_auth creates a bearer token authentication handler
@@ -318,11 +310,7 @@ func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, 
 		return next(req)
 	}
 
-	result, err := convert.ToValue(middleware)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal API key auth middleware: %v", err)
-	}
-	return result, nil
+	return authMiddlewareFactory(middleware)
 }
 
 // api_key_auth creates an API key authentication handler
@@ -339,15 +327,10 @@ func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		return starlark.None, err
 	}
 
-	// Convert keys list to Go slice
+	// Convert keys list to Go slice using helper
 	var keysSlice []string
 	if keys != nil {
-		keysSlice = make([]string, keys.Len())
-		for i := 0; i < keys.Len(); i++ {
-			if keyStr, ok := keys.Index(i).(starlark.String); ok {
-				keysSlice[i] = keyStr.GoString()
-			}
-		}
+		keysSlice = starlarkListToStringSlice(keys)
 	}
 
 	apiKeyAuth := &APIKeyAuth{

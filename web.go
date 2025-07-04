@@ -16,6 +16,9 @@ import (
 // ModuleName defines the expected name for this module when used in Starlark's load() function
 const ModuleName = "web"
 
+// Pre-computed module prefix for performance
+const modulePrefix = ModuleName + "."
+
 // Configuration key constants
 const (
 	configKeyHost              = "host"
@@ -77,7 +80,7 @@ func genConfigOption[T any](name, description string, defaultValue T) *base.Conf
 	return base.NewConfigOption(defaultValue).
 		WithName(name).
 		WithDescription(description).
-		WithEnvVar(fmt.Sprintf("WEB_%s", strings.ToUpper(strings.ReplaceAll(name, "_", "_"))))
+		WithEnvVar(fmt.Sprintf("WEB_%s", strings.ToUpper(name)))
 }
 
 // newModuleWithOptions creates a Module with the given configuration options
@@ -113,26 +116,26 @@ func newModuleWithOptions(
 func (m *Module) LoadModule() starlet.ModuleLoader {
 	// Core web server functions
 	additionalFuncs := starlark.StringDict{
-		"create_server":          starlark.NewBuiltin(ModuleName+".create_server", m.createServer),
-		"create_session_manager": starlark.NewBuiltin(ModuleName+".create_session_manager", m.createSessionManager),
-		"response":               starlark.NewBuiltin(ModuleName+".response", m.response),
-		"json_response":          starlark.NewBuiltin(ModuleName+".json_response", m.jsonResponse),
-		"html_response":          starlark.NewBuiltin(ModuleName+".html_response", m.htmlResponse),
-		"redirect":               starlark.NewBuiltin(ModuleName+".redirect", m.redirect),
-		"error_response":         starlark.NewBuiltin(ModuleName+".error_response", m.errorResponse),
-		"send_file":              starlark.NewBuiltin(ModuleName+".send_file", m.sendFile),
-		"send_data":              starlark.NewBuiltin(ModuleName+".send_data", m.sendData),
-		"basic_auth":             starlark.NewBuiltin(ModuleName+".basic_auth", m.basicAuth),
-		"bearer_auth":            starlark.NewBuiltin(ModuleName+".bearer_auth", m.bearerAuth),
-		"api_key_auth":           starlark.NewBuiltin(ModuleName+".api_key_auth", m.apiKeyAuth),
+		"create_server":          starlark.NewBuiltin(modulePrefix+"create_server", m.createServer),
+		"create_session_manager": starlark.NewBuiltin(modulePrefix+"create_session_manager", m.createSessionManager),
+		"response":               starlark.NewBuiltin(modulePrefix+"response", m.response),
+		"json_response":          starlark.NewBuiltin(modulePrefix+"json_response", m.jsonResponse),
+		"html_response":          starlark.NewBuiltin(modulePrefix+"html_response", m.htmlResponse),
+		"redirect":               starlark.NewBuiltin(modulePrefix+"redirect", m.redirect),
+		"error_response":         starlark.NewBuiltin(modulePrefix+"error_response", m.errorResponse),
+		"send_file":              starlark.NewBuiltin(modulePrefix+"send_file", m.sendFile),
+		"send_data":              starlark.NewBuiltin(modulePrefix+"send_data", m.sendData),
+		"basic_auth":             starlark.NewBuiltin(modulePrefix+"basic_auth", m.basicAuth),
+		"bearer_auth":            starlark.NewBuiltin(modulePrefix+"bearer_auth", m.bearerAuth),
+		"api_key_auth":           starlark.NewBuiltin(modulePrefix+"api_key_auth", m.apiKeyAuth),
 
 		// Built-in middleware functions
-		"cors_middleware":             starlark.NewBuiltin(ModuleName+".cors_middleware", corsMiddleware),
-		"logging_middleware":          starlark.NewBuiltin(ModuleName+".logging_middleware", loggingMiddleware),
-		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", timingMiddleware),
-		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", compressionMiddleware),
-		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", securityHeadersMiddleware),
-		"session_middleware":          starlark.NewBuiltin(ModuleName+".session_middleware", m.sessionMiddleware),
+		"cors_middleware":             starlark.NewBuiltin(modulePrefix+"cors_middleware", corsMiddleware),
+		"logging_middleware":          starlark.NewBuiltin(modulePrefix+"logging_middleware", loggingMiddleware),
+		"timing_middleware":           starlark.NewBuiltin(modulePrefix+"timing_middleware", timingMiddleware),
+		"compression_middleware":      starlark.NewBuiltin(modulePrefix+"compression_middleware", compressionMiddleware),
+		"security_headers_middleware": starlark.NewBuiltin(modulePrefix+"security_headers_middleware", securityHeadersMiddleware),
+		"session_middleware":          starlark.NewBuiltin(modulePrefix+"session_middleware", m.sessionMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
@@ -149,13 +152,13 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		"host?", &host,
 		"port?", &port,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	// Convert port to integer
 	portInt, ok := port.Int64()
 	if !ok {
-		return none, fmt.Errorf("port must be an integer")
+		return starlark.None, fmt.Errorf("port must be an integer")
 	}
 
 	// Get CORS origins - implement workaround for string slice
@@ -203,12 +206,12 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 		"cookie_name?", &cookieName,
 		"max_age?", &maxAge,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	maxAgeInt, ok := maxAge.Int64()
 	if !ok {
-		return none, fmt.Errorf("max_age must be an integer")
+		return starlark.None, fmt.Errorf("max_age must be an integer")
 	}
 
 	sessionManager := NewSessionManager(secret.GoString(), cookieName.GoString(), int(maxAgeInt))
@@ -233,12 +236,12 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+		return starlark.None, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -268,18 +271,18 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+		return starlark.None, fmt.Errorf("status must be an integer")
 	}
 
 	// Convert Starlark value to JSON
 	jsonData, err := dataconv.Unmarshal(data)
 	if err != nil {
-		return none, fmt.Errorf("failed to convert data to JSON: %v", err)
+		return starlark.None, fmt.Errorf("failed to convert data to JSON: %v", err)
 	}
 
 	resp := &Response{
@@ -315,12 +318,12 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+		return starlark.None, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -354,12 +357,12 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"location", &location,
 		"status?", &status,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+		return starlark.None, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -385,12 +388,12 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 		"status", &status,
 		"message?", &message,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+		return starlark.None, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -416,7 +419,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"filepath", &filepath,
 		"content_type?", &contentType,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	resp := &Response{
@@ -446,7 +449,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"filename", &filename,
 		"content_type?", &contentType,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	resp := &Response{

@@ -8,7 +8,7 @@ import (
 	"go.starlark.net/starlark"
 )
 
-func ExampleBasicWebServer() {
+func Example_basicWebServer() {
 	script := `
 load("web", "create_server", "response", "json_response")
 
@@ -67,7 +67,7 @@ main()
 	// Output: Server created successfully
 }
 
-func ExampleRESTfulAPI() {
+func Example_restfulAPI() {
 	script := `
 load("web", "create_server", "json_response", "error_response")
 
@@ -149,7 +149,7 @@ main()
 	// Output: RESTful API server created
 }
 
-func ExampleMiddleware() {
+func Example_middleware() {
 	script := `
 load("web", "create_server", "response", "cors_middleware", "logging_middleware")
 

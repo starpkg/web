@@ -129,6 +129,67 @@ func wrapStarlarkMiddleware(middleware starlark.Callable) MiddlewareFunc {
 	}
 }
 
+// middlewareFactory creates a standardized middleware builtin with consistent error handling
+// This eliminates the ~100 lines of repetitive code in each middleware function
+func middlewareFactory(name string, middlewareFunc MiddlewareFunc) *starlark.Builtin {
+	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var req, nextHandler starlark.Value
+
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+			"request", &req,
+			"next_handler", &nextHandler,
+		); err != nil {
+			return starlark.None, err
+		}
+
+		// Convert request to Go type
+		goReq, err := dataconv.Unmarshal(req)
+		if err != nil {
+			return starlark.None, fmt.Errorf("invalid request object: %v", err)
+		}
+
+		request, ok := goReq.(*Request)
+		if !ok {
+			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
+		}
+
+		// Create next_handler wrapper
+		nextFunc := func(r *Request) *Response {
+			// Call the Starlark next_handler
+			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
+			if err != nil {
+				return InternalServerError(fmt.Sprintf("Next handler error: %v", err))
+			}
+
+			// Convert result to Response
+			respObj, err := ResponseFromStarlarkStruct(result)
+			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return InternalServerError(fmt.Sprintf("Invalid response from next handler: %v", err))
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
+				return InternalServerError("Next handler returned invalid response type")
+			}
+
+			return respObj
+		}
+
+		// Call the actual middleware function
+		response := middlewareFunc(request, nextFunc)
+
+		// Convert response back to Starlark
+		result := response.Struct()
+
+		return result, nil
+	})
+}
+
 // Built-in middleware functions
 
 // corsMiddleware creates a CORS middleware
@@ -179,123 +240,47 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 
 	// Create the actual middleware function
 	corsMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Handle preflight requests
+		// Check if this is a preflight request
 		if req.Request.Method == "OPTIONS" {
-			headers := make(http.Header)
-
-			// Set allowed origins
-			if len(originsSlice) == 1 && originsSlice[0] == "*" {
-				headers["Access-Control-Allow-Origin"] = []string{"*"}
-			} else {
-				origin := req.Request.Header.Get("Origin")
-				for _, allowedOrigin := range originsSlice {
-					if origin == allowedOrigin {
-						headers["Access-Control-Allow-Origin"] = []string{origin}
-						break
-					}
-				}
-			}
-
-			// Set other CORS headers
-			headers["Access-Control-Allow-Methods"] = []string{strings.Join(methodsSlice, ", ")}
-			headers["Access-Control-Allow-Headers"] = []string{strings.Join(headersSlice, ", ")}
-			headers["Access-Control-Max-Age"] = []string{fmt.Sprintf("%d", maxAgeInt)}
-
-			if bool(credentials) {
-				headers["Access-Control-Allow-Credentials"] = []string{"true"}
-			}
-
-			return &Response{
-				StatusCode: http.StatusOK,
-				Headers:    headers,
+			// Handle preflight request
+			resp := &Response{
+				StatusCode: 200,
+				Headers:    make(http.Header),
 				Body:       "",
 			}
+
+			// Set CORS headers
+			resp.Headers["Access-Control-Allow-Origin"] = []string{strings.Join(originsSlice, ", ")}
+			resp.Headers["Access-Control-Allow-Methods"] = []string{strings.Join(methodsSlice, ", ")}
+			resp.Headers["Access-Control-Allow-Headers"] = []string{strings.Join(headersSlice, ", ")}
+			resp.Headers["Access-Control-Max-Age"] = []string{fmt.Sprintf("%d", maxAgeInt)}
+
+			if credentials {
+				resp.Headers["Access-Control-Allow-Credentials"] = []string{"true"}
+			}
+
+			return resp
 		}
 
-		// Handle normal requests
+		// Process normal request
 		resp := next(req)
 
-		// Set CORS headers on the response
-		origin := req.Request.Header.Get("Origin")
+		// Add CORS headers to response
 		if resp.Headers == nil {
 			resp.Headers = make(http.Header)
 		}
 
-		if len(originsSlice) == 1 && originsSlice[0] == "*" {
-			resp.Headers["Access-Control-Allow-Origin"] = []string{"*"}
-		} else if origin != "" {
-			for _, allowedOrigin := range originsSlice {
-				if origin == allowedOrigin {
-					resp.Headers["Access-Control-Allow-Origin"] = []string{origin}
-					break
-				}
-			}
-		}
+		resp.Headers["Access-Control-Allow-Origin"] = []string{strings.Join(originsSlice, ", ")}
 
-		if bool(credentials) {
+		if credentials {
 			resp.Headers["Access-Control-Allow-Credentials"] = []string{"true"}
 		}
 
 		return resp
 	}
 
-	return starlark.NewBuiltin("cors_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		// This function will be called by srv.use() with request and next_handler
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return starlark.None, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return InternalServerError(fmt.Sprintf("Next handler error: %v", err))
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return InternalServerError(fmt.Sprintf("Invalid response from next handler: %v", err))
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return InternalServerError("Next handler returned invalid response type")
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := corsMiddlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	}), nil
+	// Use the middleware factory to create the builtin
+	return middlewareFactory("cors_middleware", corsMiddlewareFunc), nil
 }
 
 // loggingMiddleware creates a logging middleware
@@ -367,75 +352,8 @@ func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starla
 		return resp
 	}
 
-	// Return a Starlark builtin that implements the middleware
-	return starlark.NewBuiltin("logging_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return starlark.None, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Next handler error: %v", err),
-				}
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return &Response{
-						StatusCode: 500,
-						Headers:    make(http.Header),
-						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
-					}
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Next handler returned invalid response type",
-				}
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := loggingMiddlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	}), nil
+	// Use the middleware factory to create the builtin
+	return middlewareFactory("logging_middleware", loggingMiddlewareFunc), nil
 }
 
 // timingMiddleware creates a timing middleware that adds response time header
@@ -480,75 +398,8 @@ func timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlar
 		return resp
 	}
 
-	// Return a Starlark builtin that implements the middleware
-	return starlark.NewBuiltin("timing_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return starlark.None, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Next handler error: %v", err),
-				}
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return &Response{
-						StatusCode: 500,
-						Headers:    make(http.Header),
-						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
-					}
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Next handler returned invalid response type",
-				}
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := timingMiddlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	}), nil
+	// Use the middleware factory to create the builtin
+	return middlewareFactory("timing_middleware", timingMiddlewareFunc), nil
 }
 
 // compressionMiddleware creates a compression middleware
@@ -656,75 +507,8 @@ func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args st
 		return resp
 	}
 
-	// Return a Starlark builtin that implements the middleware
-	return starlark.NewBuiltin("compression_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return starlark.None, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Next handler error: %v", err),
-				}
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return &Response{
-						StatusCode: 500,
-						Headers:    make(http.Header),
-						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
-					}
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Next handler returned invalid response type",
-				}
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := compressionMiddlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	}), nil
+	// Use the middleware factory to create the builtin
+	return middlewareFactory("compression_middleware", compressionMiddlewareFunc), nil
 }
 
 // securityHeadersMiddleware creates a security headers middleware
@@ -794,73 +578,6 @@ func securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, arg
 		return resp
 	}
 
-	// Return a Starlark builtin that implements the middleware
-	return starlark.NewBuiltin("security_headers_middleware", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return starlark.None, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Next handler error: %v", err),
-				}
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return &Response{
-						StatusCode: 500,
-						Headers:    make(http.Header),
-						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
-					}
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Next handler returned invalid response type",
-				}
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := securityHeadersMiddlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	}), nil
+	// Use the middleware factory to create the builtin
+	return middlewareFactory("security_headers_middleware", securityHeadersMiddlewareFunc), nil
 }
