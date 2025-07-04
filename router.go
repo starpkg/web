@@ -655,10 +655,6 @@ func (router *Router) createErrorResponse(req *Request, statusCode int, defaultM
 		}
 	}
 
-	// Fall back to default error response
-	return &Response{
-		StatusCode: statusCode,
-		Headers:    make(http.Header),
-		Body:       defaultMessage,
-	}
+	// Fall back to default error response using helper
+	return createErrorResponse(statusCode, defaultMessage)
 }

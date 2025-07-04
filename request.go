@@ -2,7 +2,6 @@ package web
 
 import (
 	"bytes"
-	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +10,7 @@ import (
 	"path"
 	"strings"
 
+	"github.com/1set/starlet/dataconv"
 	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
@@ -45,33 +45,11 @@ func NewRequest(r *http.Request) *Request {
 
 // Struct returns a Starlark struct representation of the Request
 func (r *Request) Struct() *starlarkstruct.Struct {
-	// Create headers dict
-	headers := starlark.NewDict(len(r.Request.Header))
-	for name, values := range r.Request.Header {
-		if len(values) == 1 {
-			headers.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
-		}
-	}
+	// Create headers dict using helper
+	headers := createMultiValueDict(r.Request.Header)
 
-	// Create query dict
-	query := starlark.NewDict(len(r.Request.URL.Query()))
-	for name, values := range r.Request.URL.Query() {
-		if len(values) == 1 {
-			query.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			query.SetKey(starlark.String(name), starlark.NewList(valueList))
-		}
-	}
+	// Create query dict using helper
+	query := createMultiValueDict(r.Request.URL.Query())
 
 	// Create context dict
 	ctx := starlark.NewDict(len(r.context))
@@ -172,32 +150,22 @@ func (r *Request) JSON(thread *starlark.Thread, b *starlark.Builtin, args starla
 		return starlark.None, nil
 	}
 
-	var jsonData interface{}
-	if err := json.Unmarshal(body, &jsonData); err != nil {
+	// Use starlet's JSON unmarshaler to get proper Starlark types
+	starlarkValue, err := dataconv.UnmarshalStarlarkJSON(body)
+	if err != nil {
 		return starlark.None, nil // Return None for invalid JSON
 	}
 
-	r.parsedBody = jsonData
-	return convert.ToValue(jsonData)
+	// Cache the parsed result for subsequent calls
+	r.parsedBody = starlarkValue
+	return starlarkValue, nil
 }
 
 // Form parses form data
 func (r *Request) Form(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	if r.parsedForm != nil {
-		// Return cached result
-		formDict := starlark.NewDict(len(r.parsedForm))
-		for key, values := range r.parsedForm {
-			if len(values) == 1 {
-				formDict.SetKey(starlark.String(key), starlark.String(values[0]))
-			} else {
-				valueList := make([]starlark.Value, len(values))
-				for i, v := range values {
-					valueList[i] = starlark.String(v)
-				}
-				formDict.SetKey(starlark.String(key), starlark.NewList(valueList))
-			}
-		}
-		return formDict, nil
+		// Return cached result using helper
+		return createMultiValueDict(r.parsedForm), nil
 	}
 
 	// Parse form
@@ -207,21 +175,8 @@ func (r *Request) Form(thread *starlark.Thread, b *starlark.Builtin, args starla
 
 	r.parsedForm = r.Request.Form
 
-	// Convert to Starlark dict
-	formDict := starlark.NewDict(len(r.parsedForm))
-	for key, values := range r.parsedForm {
-		if len(values) == 1 {
-			formDict.SetKey(starlark.String(key), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			formDict.SetKey(starlark.String(key), starlark.NewList(valueList))
-		}
-	}
-
-	return formDict, nil
+	// Convert to Starlark dict using helper
+	return createMultiValueDict(r.parsedForm), nil
 }
 
 // Files parses multipart form files

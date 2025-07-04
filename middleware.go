@@ -122,12 +122,8 @@ func wrapStarlarkMiddleware(middleware starlark.Callable) MiddlewareFunc {
 	return func(req *Request, next NextFunc) *Response {
 		resp, err := callStarlarkMiddleware(&starlark.Thread{}, middleware, req, next)
 		if err != nil {
-			// If middleware execution fails, return an error response
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       fmt.Sprintf("Middleware error: %v", err),
-			}
+			// If middleware execution fails, return an error response using helper
+			return InternalServerError(fmt.Sprintf("Middleware error: %v", err))
 		}
 		return resp
 	}
@@ -155,41 +151,26 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 		return starlark.None, err
 	}
 
-	// Convert origins to Go slice
+	// Convert origins to Go slice using helper
 	var originsSlice []string
 	if origins != nil {
-		originsSlice = make([]string, origins.Len())
-		for i := 0; i < origins.Len(); i++ {
-			if originStr, ok := origins.Index(i).(starlark.String); ok {
-				originsSlice[i] = originStr.GoString()
-			}
-		}
+		originsSlice = starlarkListToStringSlice(origins)
 	} else {
 		originsSlice = []string{"*"}
 	}
 
-	// Convert methods to Go slice
+	// Convert methods to Go slice using helper
 	var methodsSlice []string
 	if methods != nil {
-		methodsSlice = make([]string, methods.Len())
-		for i := 0; i < methods.Len(); i++ {
-			if methodStr, ok := methods.Index(i).(starlark.String); ok {
-				methodsSlice[i] = methodStr.GoString()
-			}
-		}
+		methodsSlice = starlarkListToStringSlice(methods)
 	} else {
 		methodsSlice = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"}
 	}
 
-	// Convert headers to Go slice
+	// Convert headers to Go slice using helper
 	var headersSlice []string
 	if headers != nil {
-		headersSlice = make([]string, headers.Len())
-		for i := 0; i < headers.Len(); i++ {
-			if headerStr, ok := headers.Index(i).(starlark.String); ok {
-				headersSlice[i] = headerStr.GoString()
-			}
-		}
+		headersSlice = starlarkListToStringSlice(headers)
 	} else {
 		headersSlice = []string{"Content-Type", "Authorization"}
 	}
@@ -285,11 +266,7 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 			// Call the Starlark next_handler
 			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
 			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Next handler error: %v", err),
-				}
+				return InternalServerError(fmt.Sprintf("Next handler error: %v", err))
 			}
 
 			// Convert result to Response
@@ -298,22 +275,14 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 				// Try normal unmarshaling as fallback
 				goValue, err := dataconv.Unmarshal(result)
 				if err != nil {
-					return &Response{
-						StatusCode: 500,
-						Headers:    make(http.Header),
-						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
-					}
+					return InternalServerError(fmt.Sprintf("Invalid response from next handler: %v", err))
 				}
 
 				if resp, ok := goValue.(*Response); ok {
 					return resp
 				}
 
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Next handler returned invalid response type",
-				}
+				return InternalServerError("Next handler returned invalid response type")
 			}
 
 			return respObj
@@ -345,28 +314,16 @@ func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starla
 		return starlark.None, err
 	}
 
-	// Convert skip paths to Go slice
+	// Convert skip paths to Go slice using helper
 	var skipPathsSlice []string
 	if skipPaths != nil {
-		skipPathsSlice = make([]string, skipPaths.Len())
-		for i := 0; i < skipPaths.Len(); i++ {
-			if pathStr, ok := skipPaths.Index(i).(starlark.String); ok {
-				skipPathsSlice[i] = pathStr.GoString()
-			}
-		}
+		skipPathsSlice = starlarkListToStringSlice(skipPaths)
 	}
 
-	// Convert skip status to Go slice
+	// Convert skip status to Go slice using helper
 	var skipStatusSlice []int
 	if skipStatus != nil {
-		skipStatusSlice = make([]int, skipStatus.Len())
-		for i := 0; i < skipStatus.Len(); i++ {
-			if statusInt, ok := skipStatus.Index(i).(starlark.Int); ok {
-				if val, ok := statusInt.Int64(); ok {
-					skipStatusSlice[i] = int(val)
-				}
-			}
-		}
+		skipStatusSlice = starlarkListToIntSlice(skipStatus)
 	}
 
 	formatStr := format.GoString()
@@ -613,15 +570,10 @@ func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args st
 	levelInt, _ := level.Int64()
 	minSizeInt, _ := minSize.Int64()
 
-	// Convert content types to Go slice
+	// Convert content types to Go slice using helper
 	var typesSlice []string
 	if types != nil {
-		typesSlice = make([]string, types.Len())
-		for i := 0; i < types.Len(); i++ {
-			if typeStr, ok := types.Index(i).(starlark.String); ok {
-				typesSlice[i] = typeStr.GoString()
-			}
-		}
+		typesSlice = starlarkListToStringSlice(types)
 	} else {
 		// Default content types to compress
 		typesSlice = []string{

@@ -70,37 +70,25 @@ func (ba *BasicAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, ar
 
 		// Parse basic auth
 		if !strings.HasPrefix(authHeader, "Basic ") {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid authorization format",
-			}
+			return Unauthorized("Invalid authorization format")
 		}
 
 		encoded := authHeader[6:]
 		decoded, err := base64.StdEncoding.DecodeString(encoded)
 		if err != nil {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid authorization format",
-			}
+			return Unauthorized("Invalid authorization format")
 		}
 
 		parts := strings.SplitN(string(decoded), ":", 2)
 		if len(parts) != 2 {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid authorization format",
-			}
+			return Unauthorized("Invalid authorization format")
 		}
 
 		username, password := parts[0], parts[1]
 
 		// Check credentials
 		if correctPassword, exists := ba.users[username]; !exists || correctPassword != password {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid credentials",
-			}
+			return Unauthorized("Invalid credentials")
 		}
 
 		// Add user to request context
@@ -201,18 +189,12 @@ func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, a
 		// Get authorization header
 		authHeader := req.Request.Header.Get("Authorization")
 		if authHeader == "" {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Authorization required",
-			}
+			return Unauthorized("Authorization required")
 		}
 
 		// Check for Bearer token
 		if !strings.HasPrefix(authHeader, "Bearer ") {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid authorization format",
-			}
+			return Unauthorized("Invalid authorization format")
 		}
 
 		token := authHeader[7:]
@@ -220,18 +202,12 @@ func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, a
 		// Validate token
 		result, err := starlark.Call(thread, ba.validateFunc, starlark.Tuple{starlark.String(token)}, nil)
 		if err != nil {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Token validation failed",
-			}
+			return Unauthorized("Token validation failed")
 		}
 
 		// Check if token is valid (not None)
 		if result == starlark.None {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid token",
-			}
+			return Unauthorized("Invalid token")
 		}
 
 		// Add token info to request context
@@ -320,10 +296,7 @@ func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, 
 		// Get API key from header
 		apiKey := req.Request.Header.Get(aka.header)
 		if apiKey == "" {
-			return &Response{
-				StatusCode: 401,
-				Body:       "API key required",
-			}
+			return Unauthorized("API key required")
 		}
 
 		// Validate API key
@@ -336,10 +309,7 @@ func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, 
 		}
 
 		if !valid {
-			return &Response{
-				StatusCode: 401,
-				Body:       "Invalid API key",
-			}
+			return Unauthorized("Invalid API key")
 		}
 
 		// Add API key to request context

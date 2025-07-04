@@ -30,19 +30,8 @@ func NewResponse(statusCode int, body string) *Response {
 
 // Struct returns a Starlark struct representation of the Response
 func (r *Response) Struct() *starlarkstruct.Struct {
-	// Create headers dict
-	headers := starlark.NewDict(len(r.Headers))
-	for name, values := range r.Headers {
-		if len(values) == 1 {
-			headers.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
-		}
-	}
+	// Create headers dict using helper
+	headers := createMultiValueDict(r.Headers)
 
 	sd := starlark.StringDict{
 		"status_code":   starlark.MakeInt(r.StatusCode),

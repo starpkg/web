@@ -247,24 +247,9 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		Body:       body.GoString(),
 	}
 
-	// Add headers from dict
+	// Add headers from dict using helper
 	if headers.Len() > 0 {
-		iter := headers.Iterate()
-		defer iter.Done()
-		var k starlark.Value
-		for iter.Next(&k) {
-			v, _, err := headers.Get(k)
-			if err != nil {
-				continue
-			}
-
-			keyStr := dataconv.StarString(k)
-			valueStr := dataconv.StarString(v)
-
-			if keyStr != "" && valueStr != "" {
-				resp.Headers[keyStr] = []string{valueStr}
-			}
-		}
+		resp.Headers = starlarkDictToHeaders(headers)
 	}
 
 	return convert.ToValue(resp)
@@ -306,23 +291,11 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	resp.Headers["Content-Type"] = []string{"application/json"}
 
-	// Add additional headers
+	// Add additional headers using helper
 	if headers.Len() > 0 {
-		iter := headers.Iterate()
-		defer iter.Done()
-		var k starlark.Value
-		for iter.Next(&k) {
-			v, _, err := headers.Get(k)
-			if err != nil {
-				continue
-			}
-
-			keyStr := dataconv.StarString(k)
-			valueStr := dataconv.StarString(v)
-
-			if keyStr != "" && valueStr != "" {
-				resp.Headers[keyStr] = []string{valueStr}
-			}
+		additionalHeaders := starlarkDictToHeaders(headers)
+		for k, v := range additionalHeaders {
+			resp.Headers[k] = v
 		}
 	}
 
@@ -359,23 +332,11 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	resp.Headers["Content-Type"] = []string{"text/html"}
 
-	// Add additional headers
+	// Add additional headers using helper
 	if headers.Len() > 0 {
-		iter := headers.Iterate()
-		defer iter.Done()
-		var k starlark.Value
-		for iter.Next(&k) {
-			v, _, err := headers.Get(k)
-			if err != nil {
-				continue
-			}
-
-			keyStr := dataconv.StarString(k)
-			valueStr := dataconv.StarString(v)
-
-			if keyStr != "" && valueStr != "" {
-				resp.Headers[keyStr] = []string{valueStr}
-			}
+		additionalHeaders := starlarkDictToHeaders(headers)
+		for k, v := range additionalHeaders {
+			resp.Headers[k] = v
 		}
 	}
 
@@ -513,20 +474,8 @@ func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args st
 		return starlark.None, err
 	}
 
-	// Convert users dict to Go map
-	userMap := make(map[string]string)
-	if users != nil {
-		iter := users.Iterate()
-		defer iter.Done()
-		var k starlark.Value
-		for iter.Next(&k) {
-			v, _, err := users.Get(k)
-			if err != nil {
-				continue
-			}
-			userMap[dataconv.StarString(k)] = dataconv.StarString(v)
-		}
-	}
+	// Convert users dict to Go map using helper
+	userMap := starlarkDictToStringMap(users)
 
 	// Create authenticator
 	auth := &BasicAuth{
@@ -567,11 +516,8 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 		return starlark.None, err
 	}
 
-	// Convert keys list to Go slice
-	keySlice := make([]string, keys.Len())
-	for i := 0; i < keys.Len(); i++ {
-		keySlice[i] = dataconv.StarString(keys.Index(i))
-	}
+	// Convert keys list to Go slice using helper
+	keySlice := starlarkListToStringSlice(keys)
 
 	// Create authenticator
 	auth := &APIKeyAuth{
