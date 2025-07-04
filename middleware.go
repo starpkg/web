@@ -139,18 +139,18 @@ func middlewareFactory(name string, middlewareFunc MiddlewareFunc) *starlark.Bui
 			"request", &req,
 			"next_handler", &nextHandler,
 		); err != nil {
-			return starlark.None, err
+			return none, err
 		}
 
 		// Convert request to Go type
 		goReq, err := dataconv.Unmarshal(req)
 		if err != nil {
-			return starlark.None, fmt.Errorf("invalid request object: %v", err)
+			return none, fmt.Errorf("invalid request object: %v", err)
 		}
 
 		request, ok := goReq.(*Request)
 		if !ok {
-			return starlark.None, fmt.Errorf("expected Request, got %T", goReq)
+			return none, fmt.Errorf("expected Request, got %T", goReq)
 		}
 
 		// Create next_handler wrapper
@@ -209,7 +209,7 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 		"credentials?", &credentials,
 		"max_age?", &maxAge,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert origins to Go slice using helper
@@ -296,7 +296,7 @@ func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starla
 		"skip_paths?", &skipPaths,
 		"skip_status?", &skipStatus,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert skip paths to Go slice using helper
@@ -367,7 +367,7 @@ func timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlar
 		"header?", &header,
 		"precision?", &precision,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	headerName := header.GoString()
@@ -415,7 +415,7 @@ func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args st
 		"min_size?", &minSize,
 		"types?", &types,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	levelInt, _ := level.Int64()
@@ -530,7 +530,7 @@ func securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, arg
 		"csp?", &csp,
 		"referrer_policy?", &referrerPolicy,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	frameOpt := frameOptions.GoString()

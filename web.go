@@ -152,13 +152,13 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		"host?", &host,
 		"port?", &port,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert port to integer
 	portInt, ok := port.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("port must be an integer")
+		return none, fmt.Errorf("port must be an integer")
 	}
 
 	// Get CORS origins - implement workaround for string slice
@@ -206,12 +206,12 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 		"cookie_name?", &cookieName,
 		"max_age?", &maxAge,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	maxAgeInt, ok := maxAge.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("max_age must be an integer")
+		return none, fmt.Errorf("max_age must be an integer")
 	}
 
 	sessionManager := NewSessionManager(secret.GoString(), cookieName.GoString(), int(maxAgeInt))
@@ -236,12 +236,12 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("status must be an integer")
+		return none, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -271,18 +271,18 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("status must be an integer")
+		return none, fmt.Errorf("status must be an integer")
 	}
 
 	// Convert Starlark value to JSON
 	jsonData, err := dataconv.Unmarshal(data)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to convert data to JSON: %v", err)
+		return none, fmt.Errorf("failed to convert data to JSON: %v", err)
 	}
 
 	resp := &Response{
@@ -318,12 +318,12 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("status must be an integer")
+		return none, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -357,12 +357,12 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"location", &location,
 		"status?", &status,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("status must be an integer")
+		return none, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -388,12 +388,12 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 		"status", &status,
 		"message?", &message,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	statusInt, ok := status.Int64()
 	if !ok {
-		return starlark.None, fmt.Errorf("status must be an integer")
+		return none, fmt.Errorf("status must be an integer")
 	}
 
 	resp := &Response{
@@ -419,7 +419,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"filepath", &filepath,
 		"content_type?", &contentType,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	resp := &Response{
@@ -449,7 +449,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		"filename", &filename,
 		"content_type?", &contentType,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	resp := &Response{
@@ -474,7 +474,7 @@ func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args st
 		"users", &users,
 		"realm?", &realm,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert users dict to Go map using helper
@@ -496,7 +496,7 @@ func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"validate_func", &validateFunc,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Create authenticator
@@ -516,7 +516,7 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 		"keys", &keys,
 		"header?", &header,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert keys list to Go slice using helper
@@ -538,24 +538,24 @@ func (m *Module) sessionMiddleware(thread *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"session_manager", &sessionManager,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Extract session manager from Starlark value
 	goSessionManager, err := dataconv.Unmarshal(sessionManager)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to unmarshal session manager: %v", err)
+		return none, fmt.Errorf("failed to unmarshal session manager: %v", err)
 	}
 
 	sm, ok := goSessionManager.(*SessionManager)
 	if !ok {
-		return starlark.None, fmt.Errorf("expected SessionManager, got %T", goSessionManager)
+		return none, fmt.Errorf("expected SessionManager, got %T", goSessionManager)
 	}
 
 	// Create the middleware
 	middleware, err := sm.Middleware(thread, nil, nil, nil)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to create session middleware: %v", err)
+		return none, fmt.Errorf("failed to create session middleware: %v", err)
 	}
 
 	return middleware, nil

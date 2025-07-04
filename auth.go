@@ -18,7 +18,7 @@ import (
 func authMiddlewareFactory(middlewareFunc MiddlewareFunc) (starlark.Value, error) {
 	result, err := convert.ToValue(middlewareFunc)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal auth middleware: %v", err)
+		return none, fmt.Errorf("failed to marshal auth middleware: %v", err)
 	}
 	return result, nil
 }
@@ -54,7 +54,7 @@ func (ba *BasicAuth) Validate(thread *starlark.Thread, b *starlark.Builtin, args
 		"username", &username,
 		"password", &password,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	correctPassword, exists := ba.users[username.GoString()]
@@ -121,7 +121,7 @@ func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 		"users?", &users,
 		"realm?", &realm,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert users dict to Go map using helper
@@ -134,7 +134,7 @@ func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 
 	result, err := convert.ToValue(basicAuth)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal basic auth: %v", err)
+		return none, fmt.Errorf("failed to marshal basic auth: %v", err)
 	}
 	return result, nil
 }
@@ -167,13 +167,13 @@ func (ba *BearerAuth) ValidateToken(thread *starlark.Thread, b *starlark.Builtin
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"token", &token,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Call the validate function
 	result, err := starlark.Call(thread, ba.validateFunc, starlark.Tuple{token}, nil)
 	if err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	return result, nil
@@ -224,7 +224,7 @@ func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"validate_func", &validateFunc,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	bearerAuth := &BearerAuth{
@@ -233,7 +233,7 @@ func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 
 	result, err := convert.ToValue(bearerAuth)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal bearer auth: %v", err)
+		return none, fmt.Errorf("failed to marshal bearer auth: %v", err)
 	}
 	return result, nil
 }
@@ -268,7 +268,7 @@ func (aka *APIKeyAuth) ValidateKey(thread *starlark.Thread, b *starlark.Builtin,
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"api_key", &apiKey,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Check if API key is valid
@@ -324,7 +324,7 @@ func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		"keys?", &keys,
 		"header?", &header,
 	); err != nil {
-		return starlark.None, err
+		return none, err
 	}
 
 	// Convert keys list to Go slice using helper
@@ -340,7 +340,7 @@ func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 
 	result, err := convert.ToValue(apiKeyAuth)
 	if err != nil {
-		return starlark.None, fmt.Errorf("failed to marshal API key auth: %v", err)
+		return none, fmt.Errorf("failed to marshal API key auth: %v", err)
 	}
 	return result, nil
 }
