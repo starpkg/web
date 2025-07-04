@@ -105,24 +105,32 @@ func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
 			}
 		}
 
-		// Convert result back to Response
-		goValue, err := dataconv.Unmarshal(result)
+		// Convert result to Go value
+		resp, err := ResponseFromStarlarkStruct(result)
 		if err != nil {
-			return &Response{
-				StatusCode: 500,
-				Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+			// If it's not a Response struct, try normal unmarshaling
+			goValue, err := dataconv.Unmarshal(result)
+			if err != nil {
+				return &Response{
+					StatusCode: 500,
+					Headers:    make(http.Header),
+					Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+				}
+			}
+
+			// Check if the unmarshaled value is a Response
+			if r, ok := goValue.(*Response); ok {
+				resp = r
+			} else {
+				return &Response{
+					StatusCode: 500,
+					Headers:    make(http.Header),
+					Body:       "Handler did not return a Response object",
+				}
 			}
 		}
 
-		if resp, ok := goValue.(*Response); ok {
-			return resp
-		}
-
-		return &Response{
-			StatusCode: 500,
-			Headers:    make(http.Header),
-			Body:       "Invalid handler response",
-		}
+		return resp
 	}
 
 	// Add route to tree

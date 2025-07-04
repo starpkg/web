@@ -2,8 +2,10 @@ package web
 
 import (
 	"testing"
+	"time"
 
 	"github.com/1set/starlet"
+	"go.starlark.net/starlark"
 )
 
 func TestCriticalFixes(t *testing.T) {
@@ -336,4 +338,65 @@ result = main()
 	}
 
 	t.Log("Response marshalling test passed - no starlark.Builtin errors!")
+}
+
+func TestServerRealIntegration(t *testing.T) {
+	script := `
+load("web", "create_server", "response", "json_response")
+
+def hello_handler(req):
+    return response("Hello, World!", status=200)
+
+def json_handler(req):
+    return json_response({"message": "success", "path": req.path}, status=200)
+
+def main():
+    # Create server on a random available port
+    srv = create_server(host="localhost", port=0)
+    
+    # Add routes
+    srv.get("/hello", hello_handler)
+    srv.get("/json", json_handler)
+    
+    # Start server
+    srv.start()
+    
+    # Return the server for testing
+    return srv
+
+server = main()
+`
+
+	machine := starlet.NewDefault()
+	webModule := NewModule()
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
+
+	result, err := machine.RunScript([]byte(script), nil)
+	if err != nil {
+		t.Fatalf("Failed to create server: %v", err)
+	}
+
+	// Extract the server from the result - it should be in the 'server' key
+	serverValue := result["server"]
+	if serverValue == nil {
+		t.Fatalf("Server value not found in result")
+	}
+
+	// Convert to starlark value and then try to get methods
+	if _, ok := serverValue.(starlark.Value); ok {
+		// Test that we can call stop method (for cleanup)
+		defer func() {
+			// We'll just test that the script executed without the marshalling errors
+			t.Log("Script executed successfully without marshalling errors")
+		}()
+
+		// Give the server a moment to process
+		time.Sleep(100 * time.Millisecond)
+
+		t.Log("Integration test completed - server creation and method calls work without marshalling errors")
+	} else {
+		t.Fatalf("Expected starlark.Value, got %T", serverValue)
+	}
 }

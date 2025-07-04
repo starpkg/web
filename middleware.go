@@ -112,17 +112,23 @@ func callStarlarkMiddleware(thread *starlark.Thread, middleware starlark.Callabl
 		return nil, err
 	}
 
-	// Convert result to Response
-	responseObj, err := dataconv.Unmarshal(result)
+	// Convert result back to Response
+	respObj, err := ResponseFromStarlarkStruct(result)
 	if err != nil {
-		return nil, err
+		// Try normal unmarshaling as fallback
+		goValue, err := dataconv.Unmarshal(result)
+		if err != nil {
+			return nil, fmt.Errorf("failed to unmarshal response: %v", err)
+		}
+
+		if resp, ok := goValue.(*Response); ok {
+			respObj = resp
+		} else {
+			return nil, fmt.Errorf("handler did not return a Response object")
+		}
 	}
 
-	if resp, ok := responseObj.(*Response); ok {
-		return resp, nil
-	}
-
-	return nil, fmt.Errorf("middleware returned invalid response type")
+	return respObj, nil
 }
 
 // wrapStarlarkMiddleware wraps a Starlark middleware function
@@ -301,24 +307,30 @@ func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.
 			}
 
 			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(http.Header),
+						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
 				return &Response{
 					StatusCode: 500,
 					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					Body:       "Next handler returned invalid response type",
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function
@@ -450,24 +462,30 @@ func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starla
 			}
 
 			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(http.Header),
+						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
 				return &Response{
 					StatusCode: 500,
 					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					Body:       "Next handler returned invalid response type",
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function
@@ -560,24 +578,30 @@ func timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlar
 			}
 
 			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(http.Header),
+						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
 				return &Response{
 					StatusCode: 500,
 					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					Body:       "Next handler returned invalid response type",
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function
@@ -738,24 +762,30 @@ func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args st
 			}
 
 			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(http.Header),
+						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
 				return &Response{
 					StatusCode: 500,
 					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					Body:       "Next handler returned invalid response type",
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function
@@ -873,24 +903,30 @@ func securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, arg
 			}
 
 			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(http.Header),
+						Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					return resp
+				}
+
 				return &Response{
 					StatusCode: 500,
 					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+					Body:       "Next handler returned invalid response type",
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function

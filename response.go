@@ -1,9 +1,11 @@
 package web
 
 import (
+	"fmt"
 	"net/http"
 	"time"
 
+	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -131,4 +133,62 @@ func (r *Response) DeleteCookie(thread *starlark.Thread, b *starlark.Builtin, ar
 // GetStatusCode returns the status code
 func (r *Response) GetStatusCode() starlark.Int {
 	return starlark.MakeInt(r.StatusCode)
+}
+
+// FromStarlarkStruct converts a Starlark Response struct back to a Go Response object
+func ResponseFromStarlarkStruct(val starlark.Value) (*Response, error) {
+	// If it's a struct, extract the fields
+	if struct_, ok := val.(*starlarkstruct.Struct); ok {
+		resp := &Response{
+			Headers: make(map[string][]string),
+		}
+
+		// Extract status_code
+		if statusVal, err := struct_.Attr("status_code"); err == nil {
+			if statusInt, ok := statusVal.(starlark.Int); ok {
+				if status64, ok := statusInt.Int64(); ok {
+					resp.StatusCode = int(status64)
+				}
+			}
+		}
+
+		// Extract headers
+		if headersVal, err := struct_.Attr("headers"); err == nil {
+			if headersDict, ok := headersVal.(*starlark.Dict); ok {
+				iter := headersDict.Iterate()
+				defer iter.Done()
+				var k starlark.Value
+				for iter.Next(&k) {
+					v, _, err := headersDict.Get(k)
+					if err != nil {
+						continue
+					}
+					keyStr := dataconv.StarString(k)
+					valueStr := dataconv.StarString(v)
+					if keyStr != "" {
+						resp.Headers[keyStr] = []string{valueStr}
+					}
+				}
+			}
+		}
+
+		// Extract body
+		if bodyVal, err := struct_.Attr("body"); err == nil {
+			resp.Body = dataconv.StarString(bodyVal)
+		}
+
+		return resp, nil
+	}
+
+	// Try to unmarshal as a fallback
+	goValue, err := dataconv.Unmarshal(val)
+	if err != nil {
+		return nil, err
+	}
+
+	if resp, ok := goValue.(*Response); ok {
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("cannot convert %T to Response", goValue)
 }

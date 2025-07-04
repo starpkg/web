@@ -419,25 +419,31 @@ func (sm *SessionManager) Middleware(thread *starlark.Thread, b *starlark.Builti
 				}
 			}
 
-			// Convert result to Response
-			respObj, err := dataconv.Unmarshal(result)
+			// Convert result back to Response
+			respObj, err := ResponseFromStarlarkStruct(result)
 			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Invalid response from next handler: %v", err),
+				// Try normal unmarshaling as fallback
+				goValue, err := dataconv.Unmarshal(result)
+				if err != nil {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(map[string][]string),
+						Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+					}
+				}
+
+				if resp, ok := goValue.(*Response); ok {
+					respObj = resp
+				} else {
+					return &Response{
+						StatusCode: 500,
+						Headers:    make(map[string][]string),
+						Body:       "Handler did not return a Response object",
+					}
 				}
 			}
 
-			if resp, ok := respObj.(*Response); ok {
-				return resp
-			}
-
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       "Next handler returned invalid response type",
-			}
+			return respObj
 		}
 
 		// Call the actual middleware function
