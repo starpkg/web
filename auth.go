@@ -2,124 +2,191 @@ package web
 
 import (
 	"encoding/base64"
-	"net/http"
+	"fmt"
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // Authentication implementations
 
-// BasicAuth handles HTTP Basic authentication
+// BasicAuth represents a basic authentication handler
 type BasicAuth struct {
-	Users map[string]string
-	Realm string
+	users map[string]string
+	realm string
 }
 
-// NewBasicAuth creates a new basic authentication handler
+// NewBasicAuth creates a new basic auth handler
 func NewBasicAuth(users map[string]string, realm string) *BasicAuth {
 	return &BasicAuth{
-		Users: users,
-		Realm: realm,
+		users: users,
+		realm: realm,
 	}
 }
 
-// Validate checks if the provided credentials are valid
+// Struct returns a Starlark struct representation of the BasicAuth
+func (ba *BasicAuth) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"middleware": starlark.NewBuiltin("middleware", ba.Middleware),
+		"validate":   starlark.NewBuiltin("validate", ba.Validate),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("BasicAuth"), sd)
+}
+
+// Validate validates username and password credentials
 func (ba *BasicAuth) Validate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		username starlark.String
-		password starlark.String
-	)
+	var username, password starlark.String
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"username", &username,
 		"password", &password,
 	); err != nil {
-		return starlark.Bool(false), err
-	}
-
-	if expectedPassword, exists := ba.Users[username.GoString()]; exists {
-		return starlark.Bool(expectedPassword == password.GoString()), nil
-	}
-
-	return starlark.Bool(false), nil
-}
-
-// Middleware returns a middleware function for basic authentication
-func (ba *BasicAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	middleware := func(req *Request, next NextFunc) *Response {
-		// Check for Authorization header
-		authHeader := req.Request.Header.Get("Authorization")
-		if authHeader == "" {
-			return ba.unauthorizedResponse()
-		}
-
-		// Parse Basic auth
-		if !strings.HasPrefix(authHeader, "Basic ") {
-			return ba.unauthorizedResponse()
-		}
-
-		encoded := authHeader[6:] // Remove "Basic " prefix
-		decoded, err := base64.StdEncoding.DecodeString(encoded)
-		if err != nil {
-			return ba.unauthorizedResponse()
-		}
-
-		credentials := strings.SplitN(string(decoded), ":", 2)
-		if len(credentials) != 2 {
-			return ba.unauthorizedResponse()
-		}
-
-		username := credentials[0]
-		password := credentials[1]
-
-		// Validate credentials
-		if expectedPassword, exists := ba.Users[username]; exists && expectedPassword == password {
-			// Add username to request context
-			req.SetContext("username", username)
-			return next(req)
-		}
-
-		return ba.unauthorizedResponse()
-	}
-
-	return dataconv.WrapGoValue(middleware), nil
-}
-
-// unauthorizedResponse creates a 401 Unauthorized response
-func (ba *BasicAuth) unauthorizedResponse() *Response {
-	response := &Response{
-		StatusCode: 401,
-		Headers:    make(http.Header),
-		Body:       "Unauthorized",
-	}
-	response.Headers.Set("WWW-Authenticate", "Basic realm=\""+ba.Realm+"\"")
-	return response
-}
-
-// BearerAuth handles Bearer token authentication
-type BearerAuth struct {
-	ValidateFunc starlark.Callable
-}
-
-// NewBearerAuth creates a new bearer authentication handler
-func NewBearerAuth(validateFunc starlark.Callable) *BearerAuth {
-	return &BearerAuth{
-		ValidateFunc: validateFunc,
-	}
-}
-
-// Validate checks if the provided token is valid
-func (ba *BearerAuth) Validate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var token starlark.String
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "token", &token); err != nil {
 		return starlark.None, err
 	}
 
-	// Call the validation function
-	result, err := starlark.Call(thread, ba.ValidateFunc, starlark.Tuple{token}, nil)
+	correctPassword, exists := ba.users[username.GoString()]
+	if !exists || correctPassword != password.GoString() {
+		return starlark.False, nil
+	}
+
+	return starlark.True, nil
+}
+
+// Middleware returns a middleware function that enforces basic authentication
+func (ba *BasicAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	middleware := func(req *Request, next NextFunc) *Response {
+		// Check for authorization header
+		authHeader := req.Request.Header.Get("Authorization")
+		if authHeader == "" {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Authorization required",
+				Headers:    map[string][]string{"WWW-Authenticate": {fmt.Sprintf("Basic realm=\"%s\"", ba.realm)}},
+			}
+		}
+
+		// Parse basic auth
+		if !strings.HasPrefix(authHeader, "Basic ") {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Invalid authorization format",
+			}
+		}
+
+		encoded := authHeader[6:]
+		decoded, err := base64.StdEncoding.DecodeString(encoded)
+		if err != nil {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Invalid authorization format",
+			}
+		}
+
+		parts := strings.SplitN(string(decoded), ":", 2)
+		if len(parts) != 2 {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Invalid authorization format",
+			}
+		}
+
+		username, password := parts[0], parts[1]
+
+		// Check credentials
+		if correctPassword, exists := ba.users[username]; !exists || correctPassword != password {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Invalid credentials",
+			}
+		}
+
+		// Add user to request context
+		req.SetContext("username", username)
+
+		return next(req)
+	}
+
+	result, err := dataconv.Marshal(middleware)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal basic auth middleware: %v", err)
+	}
+	return result, nil
+}
+
+// basic_auth creates a basic HTTP authentication handler
+func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		users *starlark.Dict
+		realm = starlark.String("Restricted")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"users?", &users,
+		"realm?", &realm,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Convert users dict to Go map
+	usersMap := make(map[string]string)
+	if users != nil {
+		for _, item := range users.Items() {
+			key, value := item[0], item[1]
+			if keyStr, ok := key.(starlark.String); ok {
+				if valueStr, ok := value.(starlark.String); ok {
+					usersMap[keyStr.GoString()] = valueStr.GoString()
+				}
+			}
+		}
+	}
+
+	basicAuth := &BasicAuth{
+		users: usersMap,
+		realm: realm.GoString(),
+	}
+
+	result, err := dataconv.Marshal(basicAuth)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal basic auth: %v", err)
+	}
+	return result, nil
+}
+
+// BearerAuth represents a bearer token authentication handler
+type BearerAuth struct {
+	validateFunc starlark.Callable
+}
+
+// NewBearerAuth creates a new bearer auth handler
+func NewBearerAuth(validateFunc starlark.Callable) *BearerAuth {
+	return &BearerAuth{
+		validateFunc: validateFunc,
+	}
+}
+
+// Struct returns a Starlark struct representation of the BearerAuth
+func (ba *BearerAuth) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"middleware": starlark.NewBuiltin("middleware", ba.Middleware),
+		"validate":   starlark.NewBuiltin("validate", ba.ValidateToken),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("BearerAuth"), sd)
+}
+
+// ValidateToken validates a bearer token
+func (ba *BearerAuth) ValidateToken(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var token starlark.String
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"token", &token,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Call the validate function
+	result, err := starlark.Call(thread, ba.validateFunc, starlark.Tuple{token}, nil)
 	if err != nil {
 		return starlark.None, err
 	}
@@ -127,125 +194,199 @@ func (ba *BearerAuth) Validate(thread *starlark.Thread, b *starlark.Builtin, arg
 	return result, nil
 }
 
-// Middleware returns a middleware function for bearer authentication
+// Middleware returns a middleware function that enforces bearer authentication
 func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	middleware := func(req *Request, next NextFunc) *Response {
-		// Check for Authorization header
+		// Get authorization header
 		authHeader := req.Request.Header.Get("Authorization")
 		if authHeader == "" {
 			return &Response{
 				StatusCode: 401,
-				Headers:    make(http.Header),
-				Body:       "Authorization header required",
+				Body:       "Authorization required",
 			}
 		}
 
-		// Parse Bearer token
+		// Check for Bearer token
 		if !strings.HasPrefix(authHeader, "Bearer ") {
 			return &Response{
 				StatusCode: 401,
-				Headers:    make(http.Header),
 				Body:       "Invalid authorization format",
 			}
 		}
 
-		token := authHeader[7:] // Remove "Bearer " prefix
+		token := authHeader[7:]
 
 		// Validate token
-		result, err := starlark.Call(&starlark.Thread{}, ba.ValidateFunc, starlark.Tuple{starlark.String(token)}, nil)
+		result, err := starlark.Call(thread, ba.validateFunc, starlark.Tuple{starlark.String(token)}, nil)
 		if err != nil {
 			return &Response{
 				StatusCode: 401,
-				Headers:    make(http.Header),
-				Body:       "Token validation error",
+				Body:       "Token validation failed",
 			}
 		}
 
-		// Check if validation returned user info
+		// Check if token is valid (not None)
 		if result == starlark.None {
 			return &Response{
 				StatusCode: 401,
-				Headers:    make(http.Header),
 				Body:       "Invalid token",
 			}
 		}
 
 		// Add token info to request context
-		if tokenInfo, err := dataconv.Unmarshal(result); err == nil {
-			req.SetContext("token_info", tokenInfo)
+		if tokenData, err := dataconv.Unmarshal(result); err == nil {
+			req.SetContext("token_info", tokenData)
 		}
 
 		return next(req)
 	}
 
-	return dataconv.WrapGoValue(middleware), nil
+	result, err := dataconv.Marshal(middleware)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal bearer auth middleware: %v", err)
+	}
+	return result, nil
 }
 
-// APIKeyAuth handles API key authentication
+// bearer_auth creates a bearer token authentication handler
+func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var validateFunc starlark.Callable
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"validate_func", &validateFunc,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	bearerAuth := &BearerAuth{
+		validateFunc: validateFunc,
+	}
+
+	result, err := dataconv.Marshal(bearerAuth)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal bearer auth: %v", err)
+	}
+	return result, nil
+}
+
+// APIKeyAuth represents an API key authentication handler
 type APIKeyAuth struct {
-	Keys   []string
-	Header string
+	keys   []string
+	header string
 }
 
-// NewAPIKeyAuth creates a new API key authentication handler
+// NewAPIKeyAuth creates a new API key auth handler
 func NewAPIKeyAuth(keys []string, header string) *APIKeyAuth {
 	return &APIKeyAuth{
-		Keys:   keys,
-		Header: header,
+		keys:   keys,
+		header: header,
 	}
 }
 
-// Validate checks if the provided API key is valid
-func (aka *APIKeyAuth) Validate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var key starlark.String
+// Struct returns a Starlark struct representation of the APIKeyAuth
+func (aka *APIKeyAuth) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"middleware": starlark.NewBuiltin("middleware", aka.Middleware),
+		"validate":   starlark.NewBuiltin("validate", aka.ValidateKey),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("APIKeyAuth"), sd)
+}
 
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "key", &key); err != nil {
-		return starlark.Bool(false), err
+// ValidateKey validates an API key
+func (aka *APIKeyAuth) ValidateKey(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var apiKey starlark.String
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"api_key", &apiKey,
+	); err != nil {
+		return starlark.None, err
 	}
 
-	keyStr := key.GoString()
-	for _, validKey := range aka.Keys {
-		if validKey == keyStr {
-			return starlark.Bool(true), nil
+	// Check if API key is valid
+	keyStr := apiKey.GoString()
+	for _, key := range aka.keys {
+		if key == keyStr {
+			return starlark.True, nil
 		}
 	}
 
-	return starlark.Bool(false), nil
+	return starlark.False, nil
 }
 
-// Middleware returns a middleware function for API key authentication
+// Middleware returns a middleware function that enforces API key authentication
 func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	middleware := func(req *Request, next NextFunc) *Response {
-		// Check for API key in header
-		apiKey := req.Request.Header.Get(aka.Header)
-		if apiKey == "" {
-			// Check in query parameters as fallback
-			apiKey = req.Request.URL.Query().Get("api_key")
-		}
-
+		// Get API key from header
+		apiKey := req.Request.Header.Get(aka.header)
 		if apiKey == "" {
 			return &Response{
 				StatusCode: 401,
-				Headers:    make(http.Header),
 				Body:       "API key required",
 			}
 		}
 
 		// Validate API key
-		for _, validKey := range aka.Keys {
-			if validKey == apiKey {
-				// Add API key to request context
-				req.SetContext("api_key", apiKey)
-				return next(req)
+		valid := false
+		for _, key := range aka.keys {
+			if key == apiKey {
+				valid = true
+				break
 			}
 		}
 
-		return &Response{
-			StatusCode: 401,
-			Headers:    make(http.Header),
-			Body:       "Invalid API key",
+		if !valid {
+			return &Response{
+				StatusCode: 401,
+				Body:       "Invalid API key",
+			}
+		}
+
+		// Add API key to request context
+		req.SetContext("api_key", apiKey)
+
+		return next(req)
+	}
+
+	result, err := dataconv.Marshal(middleware)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal API key auth middleware: %v", err)
+	}
+	return result, nil
+}
+
+// api_key_auth creates an API key authentication handler
+func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		keys   *starlark.List
+		header = starlark.String("X-API-Key")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"keys?", &keys,
+		"header?", &header,
+	); err != nil {
+		return starlark.None, err
+	}
+
+	// Convert keys list to Go slice
+	var keysSlice []string
+	if keys != nil {
+		keysSlice = make([]string, keys.Len())
+		for i := 0; i < keys.Len(); i++ {
+			if keyStr, ok := keys.Index(i).(starlark.String); ok {
+				keysSlice[i] = keyStr.GoString()
+			}
 		}
 	}
 
-	return dataconv.WrapGoValue(middleware), nil
+	apiKeyAuth := &APIKeyAuth{
+		keys:   keysSlice,
+		header: header.GoString(),
+	}
+
+	result, err := dataconv.Marshal(apiKeyAuth)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal API key auth: %v", err)
+	}
+	return result, nil
 }

@@ -4,9 +4,9 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/1set/starlet/dataconv"
@@ -33,7 +33,7 @@ type Server struct {
 	router         *Router
 	middleware     []MiddlewareFunc
 	sessionManager *SessionManager
-	running        atomic.Bool
+	running        bool
 	mu             sync.RWMutex
 }
 
@@ -94,21 +94,26 @@ func (s *Server) writeResponse(w http.ResponseWriter, resp *Response) {
 
 	// Write body
 	if resp.JSONData != nil {
-		// Handle JSON response
-		jsonBytes, err := dataconv.Marshal(resp.JSONData)
+		// Handle JSON response - first convert to starlark.Value, then to JSON
+		starlarkValue, err := dataconv.Marshal(resp.JSONData)
 		if err != nil {
 			http.Error(w, "Internal server error", http.StatusInternalServerError)
 			return
 		}
 
-		if jsonStr, ok := jsonBytes.(starlark.String); ok {
-			w.Write([]byte(jsonStr.GoString()))
-		} else {
-			w.Write([]byte(fmt.Sprintf("%v", jsonBytes)))
+		jsonStr, err := dataconv.MarshalStarlarkJSON(starlarkValue, 0)
+		if err != nil {
+			http.Error(w, "Internal server error", http.StatusInternalServerError)
+			return
 		}
+		w.Write([]byte(jsonStr))
 	} else if resp.FilePath != "" {
-		// Handle file response
-		http.ServeFile(w, &http.Request{Method: "GET", URL: &http.URL{Path: resp.FilePath}}, resp.FilePath)
+		// Handle file response - create a proper request for ServeFile
+		req := &http.Request{
+			Method: "GET",
+			URL:    &url.URL{Path: resp.FilePath},
+		}
+		http.ServeFile(w, req, resp.FilePath)
 	} else {
 		// Handle regular body
 		w.Write([]byte(resp.Body))
@@ -305,11 +310,24 @@ func (s *Server) Use(thread *starlark.Thread, b *starlark.Builtin, args starlark
 			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "request", &reqArg); err != nil {
 				return starlark.None, err
 			}
-			return dataconv.WrapGoValue(next(req)), nil
+			resp := next(req)
+			result, err := dataconv.Marshal(resp)
+			if err != nil {
+				return starlark.None, fmt.Errorf("failed to marshal response: %v", err)
+			}
+			return result, nil
 		})
 
 		// Call middleware function
-		result, err := starlark.Call(thread, middlewareFunc, starlark.Tuple{dataconv.WrapGoValue(req), nextHandler}, nil)
+		reqValue, err := dataconv.Marshal(req)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Failed to marshal request: %v", err),
+			}
+		}
+
+		result, err := starlark.Call(thread, middlewareFunc, starlark.Tuple{reqValue, nextHandler}, nil)
 		if err != nil {
 			return &Response{
 				StatusCode: 500,
@@ -318,10 +336,16 @@ func (s *Server) Use(thread *starlark.Thread, b *starlark.Builtin, args starlark
 		}
 
 		// Convert result back to Response
-		if response, ok := result.(*dataconv.GoValue); ok {
-			if resp, ok := response.GoValue().(*Response); ok {
-				return resp
+		goValue, err := dataconv.Unmarshal(result)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Failed to unmarshal middleware response: %v", err),
 			}
+		}
+
+		if resp, ok := goValue.(*Response); ok {
+			return resp
 		}
 
 		return &Response{
@@ -356,12 +380,19 @@ func (s *Server) Static(thread *starlark.Thread, b *starlark.Builtin, args starl
 
 // Run starts the server and blocks
 func (s *Server) Run(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if s.running.Load() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
 		return starlark.None, fmt.Errorf("server is already running")
 	}
+	s.running = true
+	s.mu.Unlock()
 
-	s.running.Store(true)
-	defer s.running.Store(false)
+	defer func() {
+		s.mu.Lock()
+		s.running = false
+		s.mu.Unlock()
+	}()
 
 	fmt.Printf("Starting server on %s:%d\n", s.config.Host, s.config.Port)
 
@@ -374,14 +405,20 @@ func (s *Server) Run(thread *starlark.Thread, b *starlark.Builtin, args starlark
 
 // StartBackground starts the server in the background
 func (s *Server) StartBackground(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if s.running.Load() {
+	s.mu.Lock()
+	if s.running {
+		s.mu.Unlock()
 		return starlark.None, fmt.Errorf("server is already running")
 	}
-
-	s.running.Store(true)
+	s.running = true
+	s.mu.Unlock()
 
 	go func() {
-		defer s.running.Store(false)
+		defer func() {
+			s.mu.Lock()
+			s.running = false
+			s.mu.Unlock()
+		}()
 		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
 			fmt.Printf("Server error: %v\n", err)
 		}
@@ -392,7 +429,11 @@ func (s *Server) StartBackground(thread *starlark.Thread, b *starlark.Builtin, a
 
 // Stop stops the server
 func (s *Server) Stop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if !s.running.Load() {
+	s.mu.RLock()
+	running := s.running
+	s.mu.RUnlock()
+
+	if !running {
 		return starlark.None, fmt.Errorf("server is not running")
 	}
 
@@ -408,5 +449,8 @@ func (s *Server) Stop(thread *starlark.Thread, b *starlark.Builtin, args starlar
 
 // IsRunning checks if the server is running
 func (s *Server) IsRunning(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return starlark.Bool(s.running.Load()), nil
+	s.mu.RLock()
+	running := s.running
+	s.mu.RUnlock()
+	return starlark.Bool(running), nil
 }

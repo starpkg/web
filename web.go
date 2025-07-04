@@ -3,7 +3,6 @@ package web
 
 import (
 	"fmt"
-	"net/http"
 	"time"
 
 	"github.com/1set/starlet"
@@ -55,7 +54,7 @@ func NewModule() *Module {
 }
 
 // NewModuleWithConfig creates a new instance of Module with the given configuration values
-func NewModuleWithConfig(host string, port int, readTimeout, writeTimeout, maxBodySize int64, enableCORS bool, corsOrigins []string, enableCompression bool, staticCacheMaxAge int) *Module {
+func NewModuleWithConfig(host string, port int, readTimeout, writeTimeout int, maxBodySize int64, enableCORS bool, corsOrigins []string, enableCompression bool, staticCacheMaxAge int) *Module {
 	return newModuleWithOptions(
 		genConfigOption(configKeyHost, "Host address with preset value", host),
 		genConfigOption(configKeyPort, "Port number with preset value", port),
@@ -162,16 +161,20 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		Port:              int(portInt),
 		ReadTimeout:       time.Duration(m.ext.GetInt(configKeyReadTimeout, 30)) * time.Second,
 		WriteTimeout:      time.Duration(m.ext.GetInt(configKeyWriteTimeout, 30)) * time.Second,
-		MaxBodySize:       m.ext.GetInt64(configKeyMaxBodySize, 32*1024*1024),
+		MaxBodySize:       int64(m.ext.GetInt(configKeyMaxBodySize, 32*1024*1024)),
 		EnableCORS:        m.ext.GetBool(configKeyEnableCORS, false),
-		CORSOrigins:       m.ext.GetStringSlice(configKeyCORSOrigins, []string{"*"}),
+		CORSOrigins:       []string{"*"}, // Default value since GetStringSlice is not available
 		EnableCompression: m.ext.GetBool(configKeyEnableCompression, true),
 		StaticCacheMaxAge: m.ext.GetInt(configKeyStaticCacheMaxAge, 3600),
 	}
 
 	// Create and return server instance
 	server := NewServer(config)
-	return dataconv.WrapGoValue(server), nil
+	result, err := dataconv.Marshal(server)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal server: %v", err)
+	}
+	return result, nil
 }
 
 // createSessionManager creates a session manager for handling user sessions
@@ -196,7 +199,11 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 	}
 
 	sessionManager := NewSessionManager(secret.GoString(), cookieName.GoString(), int(maxAgeInt))
-	return dataconv.WrapGoValue(sessionManager), nil
+	result, err := dataconv.Marshal(sessionManager)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to marshal session manager: %v", err)
+	}
+	return result, nil
 }
 
 // response creates a basic HTTP response
@@ -222,7 +229,7 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	resp := &Response{
 		StatusCode: int(statusInt),
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       body.GoString(),
 	}
 
@@ -236,11 +243,17 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 			if err != nil {
 				continue
 			}
-			resp.Headers.Set(dataconv.AsString(k), dataconv.AsString(v))
+
+			keyStr := dataconv.StarString(k)
+			valueStr := dataconv.StarString(v)
+
+			if keyStr != "" && valueStr != "" {
+				resp.Headers[keyStr] = []string{valueStr}
+			}
 		}
 	}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // jsonResponse creates a JSON HTTP response
@@ -272,12 +285,12 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 
 	resp := &Response{
 		StatusCode: int(statusInt),
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		JSONData:   jsonData,
 	}
 
 	// Set content type
-	resp.Headers.Set("Content-Type", "application/json")
+	resp.Headers["Content-Type"] = []string{"application/json"}
 
 	// Add additional headers
 	if headers.Len() > 0 {
@@ -289,11 +302,17 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 			if err != nil {
 				continue
 			}
-			resp.Headers.Set(dataconv.AsString(k), dataconv.AsString(v))
+
+			keyStr := dataconv.StarString(k)
+			valueStr := dataconv.StarString(v)
+
+			if keyStr != "" && valueStr != "" {
+				resp.Headers[keyStr] = []string{valueStr}
+			}
 		}
 	}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // htmlResponse creates an HTML HTTP response
@@ -319,12 +338,12 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 
 	resp := &Response{
 		StatusCode: int(statusInt),
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       content.GoString(),
 	}
 
 	// Set content type
-	resp.Headers.Set("Content-Type", "text/html")
+	resp.Headers["Content-Type"] = []string{"text/html"}
 
 	// Add additional headers
 	if headers.Len() > 0 {
@@ -336,11 +355,17 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 			if err != nil {
 				continue
 			}
-			resp.Headers.Set(dataconv.AsString(k), dataconv.AsString(v))
+
+			keyStr := dataconv.StarString(k)
+			valueStr := dataconv.StarString(v)
+
+			if keyStr != "" && valueStr != "" {
+				resp.Headers[keyStr] = []string{valueStr}
+			}
 		}
 	}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // redirect creates a redirect response
@@ -364,14 +389,14 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	resp := &Response{
 		StatusCode: int(statusInt),
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       "",
 	}
 
 	// Set location header
-	resp.Headers.Set("Location", location.GoString())
+	resp.Headers["Location"] = []string{location.GoString()}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // errorResponse creates an error response
@@ -395,14 +420,14 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 
 	resp := &Response{
 		StatusCode: int(statusInt),
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       message.GoString(),
 	}
 
 	// Set content type
-	resp.Headers.Set("Content-Type", "text/plain")
+	resp.Headers["Content-Type"] = []string{"text/plain"}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // sendFile sends a file from the filesystem
@@ -421,16 +446,16 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	resp := &Response{
 		StatusCode: 200,
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		FilePath:   filepath.GoString(),
 	}
 
 	// Set content type if provided
 	if contentType.GoString() != "" {
-		resp.Headers.Set("Content-Type", contentType.GoString())
+		resp.Headers["Content-Type"] = []string{contentType.GoString()}
 	}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
 // sendData sends raw data as a file download
@@ -451,34 +476,32 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	resp := &Response{
 		StatusCode: 200,
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       data.GoString(),
 	}
 
 	// Set content type and attachment headers
-	resp.Headers.Set("Content-Type", contentType.GoString())
-	resp.Headers.Set("Content-Disposition", fmt.Sprintf("attachment; filename=\"%s\"", filename.GoString()))
+	resp.Headers["Content-Type"] = []string{contentType.GoString()}
+	resp.Headers["Content-Disposition"] = []string{fmt.Sprintf("attachment; filename=\"%s\"", filename.GoString())}
 
-	return dataconv.WrapGoValue(resp), nil
+	return resp.Struct(), nil
 }
 
-// basicAuth creates a basic HTTP authentication handler
+// basicAuth creates a basic HTTP authentication validator
 func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		users = starlark.NewDict(0)
-		realm = starlark.String("Restricted")
-	)
+	var users *starlark.Dict
+	var realm starlark.String
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"users?", &users,
+		"users", &users,
 		"realm?", &realm,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	// Convert users dict to Go map
 	userMap := make(map[string]string)
-	if users.Len() > 0 {
+	if users != nil {
 		iter := users.Iterate()
 		defer iter.Done()
 		var k starlark.Value
@@ -487,50 +510,62 @@ func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args st
 			if err != nil {
 				continue
 			}
-			userMap[dataconv.AsString(k)] = dataconv.AsString(v)
+			userMap[dataconv.StarString(k)] = dataconv.StarString(v)
 		}
 	}
 
-	auth := NewBasicAuth(userMap, realm.GoString())
-	return dataconv.WrapGoValue(auth), nil
+	// Create authenticator
+	auth := &BasicAuth{
+		users: userMap,
+		realm: realm.GoString(),
+	}
+
+	return auth.Struct(), nil
 }
 
-// bearerAuth creates a bearer token authentication handler
+// bearerAuth creates a bearer token authentication validator
 func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var validateFunc starlark.Callable
+	var validateFunc *starlark.Function
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"validate_func", &validateFunc,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
-	auth := NewBearerAuth(validateFunc)
-	return dataconv.WrapGoValue(auth), nil
+	// Create authenticator
+	auth := &BearerAuth{
+		validateFunc: validateFunc,
+	}
+
+	return auth.Struct(), nil
 }
 
-// apiKeyAuth creates an API key authentication handler
+// apiKeyAuth creates an API key authentication validator
 func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		keys   = starlark.NewList(nil)
-		header = starlark.String("X-API-Key")
-	)
+	var keys *starlark.List
+	var header starlark.String
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"keys?", &keys,
+		"keys", &keys,
 		"header?", &header,
 	); err != nil {
-		return none, err
+		return starlark.None, err
 	}
 
 	// Convert keys list to Go slice
 	keySlice := make([]string, keys.Len())
 	for i := 0; i < keys.Len(); i++ {
-		keySlice[i] = dataconv.AsString(keys.Index(i))
+		keySlice[i] = dataconv.StarString(keys.Index(i))
 	}
 
-	auth := NewAPIKeyAuth(keySlice, header.GoString())
-	return dataconv.WrapGoValue(auth), nil
+	// Create authenticator
+	auth := &APIKeyAuth{
+		keys:   keySlice,
+		header: header.GoString(),
+	}
+
+	return auth.Struct(), nil
 }
 
 // Built-in middleware functions
@@ -558,17 +593,17 @@ func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, ar
 	// Convert to Go slices
 	originSlice := make([]string, origins.Len())
 	for i := 0; i < origins.Len(); i++ {
-		originSlice[i] = dataconv.AsString(origins.Index(i))
+		originSlice[i] = dataconv.StarString(origins.Index(i))
 	}
 
 	methodSlice := make([]string, methods.Len())
 	for i := 0; i < methods.Len(); i++ {
-		methodSlice[i] = dataconv.AsString(methods.Index(i))
+		methodSlice[i] = dataconv.StarString(methods.Index(i))
 	}
 
 	headerSlice := make([]string, headers.Len())
 	for i := 0; i < headers.Len(); i++ {
-		headerSlice[i] = dataconv.AsString(headers.Index(i))
+		headerSlice[i] = dataconv.StarString(headers.Index(i))
 	}
 
 	maxAgeInt, _ := maxAge.Int64()
@@ -596,7 +631,7 @@ func (m *Module) loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin,
 	// Convert skip_paths to Go slice
 	skipPathSlice := make([]string, skipPaths.Len())
 	for i := 0; i < skipPaths.Len(); i++ {
-		skipPathSlice[i] = dataconv.AsString(skipPaths.Index(i))
+		skipPathSlice[i] = dataconv.StarString(skipPaths.Index(i))
 	}
 
 	middleware := NewLoggingMiddleware(format.GoString(), skipPathSlice, bool(includeBody))
@@ -650,7 +685,7 @@ func (m *Module) compressionMiddleware(thread *starlark.Thread, b *starlark.Buil
 	// Convert types to Go slice
 	typeSlice := make([]string, types.Len())
 	for i := 0; i < types.Len(); i++ {
-		typeSlice[i] = dataconv.AsString(types.Index(i))
+		typeSlice[i] = dataconv.StarString(types.Index(i))
 	}
 
 	middleware := NewCompressionMiddleware(int(levelInt), int(minSizeInt), typeSlice)

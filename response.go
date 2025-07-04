@@ -2,14 +2,16 @@ package web
 
 import (
 	"net/http"
+	"time"
 
 	"go.starlark.net/starlark"
+	"go.starlark.net/starlarkstruct"
 )
 
 // Response represents an HTTP response
 type Response struct {
 	StatusCode int
-	Headers    http.Header
+	Headers    map[string][]string
 	Body       string
 	JSONData   interface{}
 	FilePath   string
@@ -19,24 +21,31 @@ type Response struct {
 func NewResponse(statusCode int, body string) *Response {
 	return &Response{
 		StatusCode: statusCode,
-		Headers:    make(http.Header),
+		Headers:    make(map[string][]string),
 		Body:       body,
 	}
+}
+
+// Struct returns a Starlark struct representation of the Response
+func (r *Response) Struct() *starlarkstruct.Struct {
+	sd := starlark.StringDict{
+		"set_cookie":    starlark.NewBuiltin("set_cookie", r.SetCookie),
+		"delete_cookie": starlark.NewBuiltin("delete_cookie", r.DeleteCookie),
+		"status_code":   starlark.MakeInt(r.StatusCode),
+		"headers":       r.GetHeaders(),
+		"body":          r.GetBody(),
+	}
+	return starlarkstruct.FromStringDict(starlark.String("Response"), sd)
 }
 
 // Starlark-accessible methods
 
 // SetCookie sets a cookie on the response
 func (r *Response) SetCookie(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		name     starlark.String
-		value    starlark.String
-		maxAge   = starlark.None
-		path     = starlark.String("/")
-		domain   = starlark.String("")
-		secure   = starlark.Bool(false)
-		httpOnly = starlark.Bool(true)
-	)
+	var name, value starlark.String
+	var maxAge starlark.Int
+	var path, domain starlark.String
+	var secure, httpOnly starlark.Bool
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name", &name,
@@ -59,26 +68,25 @@ func (r *Response) SetCookie(thread *starlark.Thread, b *starlark.Builtin, args 
 		HttpOnly: bool(httpOnly),
 	}
 
-	// Set max age if provided
-	if maxAge != starlark.None {
-		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
-			if age, ok := maxAgeInt.Int64(); ok {
-				cookie.MaxAge = int(age)
-			}
+	if maxAge != (starlark.Int{}) {
+		if maxAgeInt, ok := maxAge.Int64(); ok {
+			cookie.MaxAge = int(maxAgeInt)
 		}
 	}
 
-	r.Headers.Add("Set-Cookie", cookie.String())
+	cookieStr := cookie.String()
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers["Set-Cookie"] = append(r.Headers["Set-Cookie"], cookieStr)
+
 	return starlark.None, nil
 }
 
 // DeleteCookie deletes a cookie
 func (r *Response) DeleteCookie(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		name   starlark.String
-		path   = starlark.String("/")
-		domain = starlark.String("")
-	)
+	var name starlark.String
+	var path, domain starlark.String
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name", &name,
@@ -89,14 +97,20 @@ func (r *Response) DeleteCookie(thread *starlark.Thread, b *starlark.Builtin, ar
 	}
 
 	cookie := &http.Cookie{
-		Name:   name.GoString(),
-		Value:  "",
-		Path:   path.GoString(),
-		Domain: domain.GoString(),
-		MaxAge: -1,
+		Name:    name.GoString(),
+		Value:   "",
+		Path:    path.GoString(),
+		Domain:  domain.GoString(),
+		MaxAge:  -1,
+		Expires: time.Unix(0, 0),
 	}
 
-	r.Headers.Add("Set-Cookie", cookie.String())
+	cookieStr := cookie.String()
+	if r.Headers == nil {
+		r.Headers = make(map[string][]string)
+	}
+	r.Headers["Set-Cookie"] = append(r.Headers["Set-Cookie"], cookieStr)
+
 	return starlark.None, nil
 }
 
@@ -105,24 +119,20 @@ func (r *Response) GetStatusCode() starlark.Int {
 	return starlark.MakeInt(r.StatusCode)
 }
 
-// GetHeaders returns the headers as a Starlark dict
+// GetHeaders returns the response headers as a Starlark dict
 func (r *Response) GetHeaders() *starlark.Dict {
 	headers := starlark.NewDict(len(r.Headers))
-	for name, values := range r.Headers {
-		if len(values) == 1 {
-			headers.SetKey(starlark.String(name), starlark.String(values[0]))
-		} else {
-			valueList := make([]starlark.Value, len(values))
-			for i, v := range values {
-				valueList[i] = starlark.String(v)
-			}
-			headers.SetKey(starlark.String(name), starlark.NewList(valueList))
+	for k, v := range r.Headers {
+		list := make([]starlark.Value, len(v))
+		for i, val := range v {
+			list[i] = starlark.String(val)
 		}
+		headers.SetKey(starlark.String(k), starlark.NewList(list))
 	}
 	return headers
 }
 
-// GetBody returns the response body
-func (r *Response) GetBody() starlark.String {
+// GetBody returns the response body as a Starlark string
+func (r *Response) GetBody() starlark.Value {
 	return starlark.String(r.Body)
 }

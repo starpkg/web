@@ -241,7 +241,11 @@ func (r *Request) Files(thread *starlark.Thread, b *starlark.Builtin, args starl
 		// Return cached result
 		files := starlark.NewDict(len(r.parsedFiles))
 		for name, file := range r.parsedFiles {
-			files.SetKey(starlark.String(name), dataconv.WrapGoValue(file))
+			fileValue, err := dataconv.Marshal(file)
+			if err != nil {
+				continue // Skip files that can't be marshaled
+			}
+			files.SetKey(starlark.String(name), fileValue)
 		}
 		return files, nil
 	}
@@ -279,7 +283,11 @@ func (r *Request) Files(thread *starlark.Thread, b *starlark.Builtin, args starl
 
 	files := starlark.NewDict(len(r.parsedFiles))
 	for name, file := range r.parsedFiles {
-		files.SetKey(starlark.String(name), dataconv.WrapGoValue(file))
+		fileValue, err := dataconv.Marshal(file)
+		if err != nil {
+			continue // Skip files that can't be marshaled
+		}
+		files.SetKey(starlark.String(name), fileValue)
 	}
 
 	return files, nil

@@ -59,11 +59,18 @@ func (sm *SessionManager) GetSession(thread *starlark.Thread, b *starlark.Builti
 	}
 
 	// Extract Request from Starlark value
-	if reqValue, ok := request.(*dataconv.GoValue); ok {
-		if req, ok := reqValue.GoValue().(*Request); ok {
-			session := sm.getSession(req)
-			return dataconv.WrapGoValue(session), nil
+	goValue, err := dataconv.Unmarshal(request)
+	if err != nil {
+		return starlark.None, fmt.Errorf("failed to unmarshal request: %v", err)
+	}
+
+	if req, ok := goValue.(*Request); ok {
+		session := sm.getSession(req)
+		result, err := dataconv.Marshal(session)
+		if err != nil {
+			return starlark.None, fmt.Errorf("failed to marshal session: %v", err)
 		}
+		return result, nil
 	}
 
 	return starlark.None, fmt.Errorf("invalid request object")

@@ -65,21 +65,34 @@ func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
 
 	// Wrap Starlark callable as HandlerFunc
 	handlerFunc := func(req *Request) *Response {
-		// Call the Starlark handler
-		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{dataconv.WrapGoValue(req)}, nil)
+		// Call the handler
+		reqValue, err := dataconv.Marshal(req)
 		if err != nil {
 			return &Response{
 				StatusCode: 500,
-				Headers:    make(http.Header),
+				Body:       fmt.Sprintf("Failed to marshal request: %v", err),
+			}
+		}
+
+		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{reqValue}, nil)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
 				Body:       fmt.Sprintf("Handler error: %v", err),
 			}
 		}
 
-		// Convert result to Response
-		if response, ok := result.(*dataconv.GoValue); ok {
-			if resp, ok := response.GoValue().(*Response); ok {
-				return resp
+		// Convert result back to Response
+		goValue, err := dataconv.Unmarshal(result)
+		if err != nil {
+			return &Response{
+				StatusCode: 500,
+				Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
 			}
+		}
+
+		if resp, ok := goValue.(*Response); ok {
+			return resp
 		}
 
 		return &Response{
