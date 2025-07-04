@@ -552,7 +552,6 @@ func (s *Server) Group(thread *starlark.Thread, b *starlark.Builtin, args starla
 	if err != nil {
 		return starlark.None, fmt.Errorf("failed to convert route group: %v", err)
 	}
-
 	return result, nil
 }
 

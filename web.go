@@ -8,6 +8,7 @@ import (
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"github.com/starpkg/base"
 	"go.starlark.net/starlark"
 )
@@ -219,16 +220,16 @@ func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Built
 	return sessionManager.Struct(), nil
 }
 
-// response creates a basic HTTP response
+// response creates a custom HTTP response
 func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		body    starlark.String
+		body    = starlark.String("")
 		status  = starlark.MakeInt(200)
 		headers = starlark.NewDict(0)
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"body", &body,
+		"body?", &body,
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
@@ -246,7 +247,7 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		Body:       body.GoString(),
 	}
 
-	// Add headers
+	// Add headers from dict
 	if headers.Len() > 0 {
 		iter := headers.Iterate()
 		defer iter.Done()
@@ -266,7 +267,7 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		}
 	}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // jsonResponse creates a JSON HTTP response
@@ -325,7 +326,7 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		}
 	}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // htmlResponse creates an HTML HTTP response
@@ -378,7 +379,7 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		}
 	}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // redirect creates a redirect response
@@ -409,7 +410,7 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 	// Set location header
 	resp.Headers["Location"] = []string{location.GoString()}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // errorResponse creates an error response
@@ -440,7 +441,7 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 	// Set content type
 	resp.Headers["Content-Type"] = []string{"text/plain"}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // sendFile sends a file from the filesystem
@@ -468,7 +469,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		resp.Headers["Content-Type"] = []string{contentType.GoString()}
 	}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // sendData sends raw data as a file download
@@ -497,7 +498,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	resp.Headers["Content-Type"] = []string{contentType.GoString()}
 	resp.Headers["Content-Disposition"] = []string{fmt.Sprintf("attachment; filename=\"%s\"", filename.GoString())}
 
-	return resp.Struct(), nil
+	return convert.ToValue(resp)
 }
 
 // basicAuth creates a basic HTTP authentication validator

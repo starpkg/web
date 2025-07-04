@@ -209,17 +209,17 @@ load("web", "response", "json_response", "html_response")
 def main():
     # Test basic response
     resp1 = response("Hello", status=200, headers={"X-Test": "value"})
-    status = resp1.status_code
-    headers = resp1.headers
-    body = resp1.body
+    status = resp1.StatusCode
+    headers = resp1.Headers
+    body = resp1.Body
     
     # Test JSON response
     resp2 = json_response({"message": "hello"}, status=201)
-    json_status = resp2.status_code
+    json_status = resp2.StatusCode
     
     # Test HTML response
     resp3 = html_response("<h1>Hello</h1>", status=200)
-    html_body = resp3.body
+    html_body = resp3.Body
     
     return [status, json_status, html_body]
 

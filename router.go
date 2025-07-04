@@ -8,7 +8,7 @@ import (
 	"regexp"
 	"strings"
 
-	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -98,32 +98,19 @@ func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
 			}
 		}
 
-		// Convert result to Go value
-		resp, err := ResponseFromStarlarkStruct(result)
-		if err != nil {
-			// If it's not a Response struct, try normal unmarshaling
-			goValue, err := dataconv.Unmarshal(result)
-			if err != nil {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
-				}
-			}
+		// Convert result to Go value using convert.FromValue
+		goValue := convert.FromValue(result)
 
-			// Check if the unmarshaled value is a Response
-			if r, ok := goValue.(*Response); ok {
-				resp = r
-			} else {
-				return &Response{
-					StatusCode: 500,
-					Headers:    make(http.Header),
-					Body:       "Handler did not return a Response object",
-				}
+		// Check if the converted value is a Response
+		if resp, ok := goValue.(*Response); ok {
+			return resp
+		} else {
+			return &Response{
+				StatusCode: 500,
+				Headers:    make(http.Header),
+				Body:       fmt.Sprintf("Handler did not return a Response object, got %T", goValue),
 			}
 		}
-
-		return resp
 	}
 
 	// Add route to tree
