@@ -450,10 +450,7 @@ func (sm *SessionManager) Middleware(thread *starlark.Thread, b *starlark.Builti
 		response := sessionMiddlewareFunc(request, nextFunc)
 
 		// Convert response back to Starlark
-		result, err := convert.ToValue(response)
-		if err != nil {
-			return starlark.None, fmt.Errorf("failed to convert response: %v", err)
-		}
+		result := response.Struct()
 
 		return result, nil
 	}), nil

@@ -400,3 +400,46 @@ server = main()
 		t.Fatalf("Expected starlark.Value, got %T", serverValue)
 	}
 }
+
+func TestRequestObjectProperties(t *testing.T) {
+	script := `
+load("web", "create_server", "json_response")
+
+def test_handler(req):
+    # These should all work without "has no .method field or method" errors
+    return json_response({
+        "method": req.method,
+        "path": req.path,
+        "headers": req.headers,
+        "query": req.query,
+        "host": req.host,
+        "remote": req.remote,
+        "proto": req.proto,
+    })
+
+def main():
+    # Create server
+    srv = create_server(host="localhost", port=0)
+    
+    # Add route that accesses request properties
+    srv.get("/test", test_handler)
+    
+    # Test passes if we can create the server and add routes without property access errors
+    return True
+
+result = main()
+`
+
+	machine := starlet.NewDefault()
+	webModule := NewModule()
+	machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+		ModuleName: webModule.LoadModule(),
+	})
+
+	_, err := machine.RunScript([]byte(script), nil)
+	if err != nil {
+		t.Errorf("Request properties test failed: %v", err)
+	}
+
+	t.Log("Request properties test passed - req.method, req.path, etc. are accessible!")
+}

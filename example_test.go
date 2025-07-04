@@ -34,15 +34,20 @@ def main():
     srv.get("/api/info", api_info)
     
     print("Server created successfully")
+    
+    # Start server
     srv.start()
-    sleep(30)
+    
+    # ... do something calling via http package to verify the response ...
+    
+    # Stop server
     srv.stop()
 
 main()
 `
 
 	// Create machine with web module
-	machine := starlet.NewWithNames(starlet.StringAnyMap{}, []string{"go_idiomatic"}, []string{})
+	machine := starlet.NewWithNames(starlet.StringAnyMap{}, []string{"go_idiomatic", "http"}, []string{})
 	machine.SetPrintFunc(func(thread *starlark.Thread, msg string) {
 		// Print function for testing
 		fmt.Println(msg)

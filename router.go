@@ -9,7 +9,6 @@ import (
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -89,13 +88,7 @@ func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
 	// Wrap Starlark callable as HandlerFunc
 	handlerFunc := func(req *Request) *Response {
 		// Call the handler
-		reqValue, err := convert.ToValue(req)
-		if err != nil {
-			return &Response{
-				StatusCode: 500,
-				Body:       fmt.Sprintf("Failed to convert request: %v", err),
-			}
-		}
+		reqValue := req.Struct()
 
 		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{reqValue}, nil)
 		if err != nil {

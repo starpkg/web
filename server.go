@@ -595,13 +595,7 @@ func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args
 	// Wrap the handler
 	handlerFunc := func(req *Request) *Response {
 		// Call the handler
-		reqValue, err := convert.ToValue(req)
-		if err != nil {
-			return &Response{
-				StatusCode: 500,
-				Body:       fmt.Sprintf("Failed to convert request: %v", err),
-			}
-		}
+		reqValue := req.Struct()
 
 		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{reqValue}, nil)
 		if err != nil {
@@ -612,23 +606,29 @@ func (s *Server) ErrorHandler(thread *starlark.Thread, b *starlark.Builtin, args
 		}
 
 		// Convert result back to Response
-		goValue, err := dataconv.Unmarshal(result)
+		resp, err := ResponseFromStarlarkStruct(result)
 		if err != nil {
+			// Try normal unmarshaling as fallback
+			goValue, err := dataconv.Unmarshal(result)
+			if err != nil {
+				return &Response{
+					StatusCode: 500,
+					Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+				}
+			}
+
+			if r, ok := goValue.(*Response); ok {
+				return r
+			}
+
 			return &Response{
 				StatusCode: 500,
-				Body:       fmt.Sprintf("Failed to unmarshal response: %v", err),
+				Headers:    make(http.Header),
+				Body:       "Invalid handler response",
 			}
 		}
 
-		if resp, ok := goValue.(*Response); ok {
-			return resp
-		}
-
-		return &Response{
-			StatusCode: 500,
-			Headers:    make(http.Header),
-			Body:       "Invalid handler response",
-		}
+		return resp
 	}
 
 	// Register handler for each status code
