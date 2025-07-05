@@ -152,6 +152,12 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 		engine.Use(gin.Logger())
 	}
 
+	// Configure method not allowed handler
+	engine.HandleMethodNotAllowed = true
+	engine.NoMethod(func(c *gin.Context) {
+		c.JSON(405, gin.H{"error": "Method not allowed"})
+	})
+
 	// Create server instance
 	server := &Server{
 		host:       serverHost,
@@ -203,7 +209,6 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		Headers:    headerMap,
 		Body:       string(body),
 	}
-
 	return convert.ToValue(response)
 }
 
@@ -223,10 +228,18 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, err
 	}
 
-	// Convert data to JSON
-	jsonBytes, err := dataconv.MarshalStarlarkJSON(data, 0)
-	if err != nil {
-		return none, fmt.Errorf("failed to marshal JSON: %v", err)
+	// Convert data to JSON, if it's not a string or bytes, encode it to JSON
+	var bodyStr string
+	switch data.(type) {
+	case starlark.String:
+		bodyStr = string(data.(starlark.String))
+	case starlark.Bytes:
+		bodyStr = string(data.(starlark.Bytes))
+	default:
+		var err error
+		if bodyStr, err = dataconv.EncodeStarlarkJSON(data); err != nil {
+			return none, fmt.Errorf("failed to marshal JSON: %v", err)
+		}
 	}
 
 	statusCode, _ := status.Int64()
@@ -250,9 +263,8 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	response := &Response{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
-		Body:       string(jsonBytes),
+		Body:       bodyStr,
 	}
-
 	return convert.ToValue(response)
 }
 
@@ -844,16 +856,27 @@ func (rw *RequestWrapper) Attr(name string) (starlark.Value, error) {
 		return val, nil
 	case "body":
 		return starlark.NewBuiltin("body", rw.bodyMethod), nil
+	case "param":
+		return starlark.NewBuiltin("param", rw.paramMethod), nil
 	default:
 		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
 	}
 }
 
 func (rw *RequestWrapper) AttrNames() []string {
-	return []string{"method", "url", "path", "host", "remote", "client_ip", "proto", "headers", "query", "context", "body"}
+	return []string{"method", "url", "path", "host", "remote", "client_ip", "proto", "headers", "query", "context", "body", "param"}
 }
 
 // bodyMethod handles the body() method call
 func (rw *RequestWrapper) bodyMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	return starlark.String(rw.request.Body()), nil
+}
+
+// paramMethod handles the param(name) method call
+func (rw *RequestWrapper) paramMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
+		return nil, err
+	}
+	return starlark.String(rw.request.Param(name)), nil
 }

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"net/http"
+	"regexp"
 	"strconv"
 	"time"
 
@@ -72,23 +73,25 @@ func (s *Server) Route(methods interface{}, path string, handler starlark.Callab
 
 // addRoute adds a route to the gin engine
 func (s *Server) addRoute(method, path string, handler starlark.Callable) error {
+	// Convert {param} style to :param style for Gin
+	ginPath := s.convertPathParams(path)
 	ginHandler := s.wrapHandler(handler)
 
 	switch method {
 	case "GET":
-		s.engine.GET(path, ginHandler)
+		s.engine.GET(ginPath, ginHandler)
 	case "POST":
-		s.engine.POST(path, ginHandler)
+		s.engine.POST(ginPath, ginHandler)
 	case "PUT":
-		s.engine.PUT(path, ginHandler)
+		s.engine.PUT(ginPath, ginHandler)
 	case "DELETE":
-		s.engine.DELETE(path, ginHandler)
+		s.engine.DELETE(ginPath, ginHandler)
 	case "PATCH":
-		s.engine.PATCH(path, ginHandler)
+		s.engine.PATCH(ginPath, ginHandler)
 	case "OPTIONS":
-		s.engine.OPTIONS(path, ginHandler)
+		s.engine.OPTIONS(ginPath, ginHandler)
 	case "HEAD":
-		s.engine.HEAD(path, ginHandler)
+		s.engine.HEAD(ginPath, ginHandler)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", method)
 	}
@@ -302,26 +305,35 @@ func (rg *RouteGroup) Head(path string, handler starlark.Callable) error {
 
 // addRoute adds a route to the gin group
 func (rg *RouteGroup) addRoute(method, path string, handler starlark.Callable) error {
+	// Convert {param} style to :param style for Gin
+	ginPath := rg.server.convertPathParams(path)
 	ginHandler := rg.server.wrapHandler(handler)
 
 	switch method {
 	case "GET":
-		rg.ginGroup.GET(path, ginHandler)
+		rg.ginGroup.GET(ginPath, ginHandler)
 	case "POST":
-		rg.ginGroup.POST(path, ginHandler)
+		rg.ginGroup.POST(ginPath, ginHandler)
 	case "PUT":
-		rg.ginGroup.PUT(path, ginHandler)
+		rg.ginGroup.PUT(ginPath, ginHandler)
 	case "DELETE":
-		rg.ginGroup.DELETE(path, ginHandler)
+		rg.ginGroup.DELETE(ginPath, ginHandler)
 	case "PATCH":
-		rg.ginGroup.PATCH(path, ginHandler)
+		rg.ginGroup.PATCH(ginPath, ginHandler)
 	case "OPTIONS":
-		rg.ginGroup.OPTIONS(path, ginHandler)
+		rg.ginGroup.OPTIONS(ginPath, ginHandler)
 	case "HEAD":
-		rg.ginGroup.HEAD(path, ginHandler)
+		rg.ginGroup.HEAD(ginPath, ginHandler)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", method)
 	}
 
 	return nil
+}
+
+// convertPathParams converts {param} style to :param style for Gin
+func (s *Server) convertPathParams(path string) string {
+	// Use regex to replace {param} with :param
+	re := regexp.MustCompile(`\{([^}]+)\}`)
+	return re.ReplaceAllString(path, ":$1")
 }
