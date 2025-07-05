@@ -57,36 +57,6 @@ func sendInternalServerError(c *gin.Context, message string) {
 	sendErrorResponse(c, http.StatusInternalServerError, message)
 }
 
-// convertPathParams converts path parameters from {param} to :param format for Gin.
-// This function transforms Flask-style path parameters to Gin's expected format,
-// enabling seamless route parameter extraction in handlers.
-func convertPathParams(path string) string {
-	result := ""
-	inParam := false
-
-	for _, char := range path {
-		switch char {
-		case '{':
-			if !inParam {
-				result += ":"
-				inParam = true
-			} else {
-				result += string(char)
-			}
-		case '}':
-			if inParam {
-				inParam = false
-			} else {
-				result += string(char)
-			}
-		default:
-			result += string(char)
-		}
-	}
-
-	return result
-}
-
 // safeString safely converts a value to string, handling nil cases
 func safeString(value interface{}) string {
 	if value == nil {

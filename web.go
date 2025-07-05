@@ -6,11 +6,9 @@ package web
 import (
 	"fmt"
 	"net/http"
-	"strings"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"github.com/gin-gonic/gin"
 	"github.com/starpkg/base"
 	"go.starlark.net/starlark"
@@ -216,7 +214,7 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		headerMap[string(key)] = string(value)
 	}
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       string(body),
@@ -275,7 +273,7 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	headerMap["Content-Type"] = "application/json"
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       bodyStr,
@@ -317,7 +315,7 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	headerMap["Content-Type"] = "text/html"
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       string(content),
@@ -342,7 +340,7 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	statusCode, _ := status.Int64()
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: int(statusCode),
 		Headers: map[string]string{
 			"Location": string(location),
@@ -369,7 +367,7 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 
 	statusCode, _ := status.Int64()
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: int(statusCode),
 		Headers:    map[string]string{},
 		Body:       string(message),
@@ -392,7 +390,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: 200,
 		Headers:    map[string]string{},
 		Body:       "",
@@ -422,7 +420,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	response := &HTTPResponse{
+	response := &Response{
 		StatusCode: 200,
 		Headers: map[string]string{
 			"Content-Type":        string(contentType),
@@ -508,29 +506,6 @@ func (s *Server) StarlarkIsRunning() bool {
 // StarlarkGroup creates a route group (Starlark-compatible wrapper)
 func (s *Server) StarlarkGroup(prefix string) *RouteGroup {
 	return s.Group(prefix)
-}
-
-// Response represents an HTTP response
-type Response struct {
-	StatusCode int               `json:"status_code"`
-	Headers    map[string]string `json:"headers"`
-	Body       string            `json:"body"`
-	FilePath   string            `json:"file_path,omitempty"`
-}
-
-// Request represents an HTTP request
-type Request struct {
-	Method   string                 `json:"method"`
-	URL      string                 `json:"url"`
-	Path     string                 `json:"path"`
-	Host     string                 `json:"host"`
-	Remote   string                 `json:"remote"`
-	ClientIP string                 `json:"client_ip"`
-	Proto    string                 `json:"proto"`
-	Headers  map[string]string      `json:"headers"`
-	Query    map[string]string      `json:"query"`
-	Context  map[string]interface{} `json:"context"`
-	ginCtx   *gin.Context           // Internal gin context
 }
 
 // ServerWrapper wraps the Server struct to provide Starlark-compatible method names
@@ -693,395 +668,4 @@ func (sw *ServerWrapper) group(thread *starlark.Thread, b *starlark.Builtin, arg
 	}
 	group := sw.server.Group(prefix)
 	return &RouteGroupWrapper{group: group}, nil
-}
-
-// RouteGroupWrapper wraps RouteGroup for Starlark
-type RouteGroupWrapper struct {
-	group *RouteGroup
-}
-
-func (rgw *RouteGroupWrapper) String() string {
-	return fmt.Sprintf("<web.RouteGroup prefix=%s>", rgw.group.prefix)
-}
-
-func (rgw *RouteGroupWrapper) Type() string {
-	return "web.RouteGroup"
-}
-
-func (rgw *RouteGroupWrapper) Freeze() {
-	// RouteGroup is immutable after creation
-}
-
-func (rgw *RouteGroupWrapper) Truth() starlark.Bool {
-	return starlark.True
-}
-
-func (rgw *RouteGroupWrapper) Hash() (uint32, error) {
-	return 0, fmt.Errorf("unhashable type: %s", rgw.Type())
-}
-
-func (rgw *RouteGroupWrapper) Attr(name string) (starlark.Value, error) {
-	switch name {
-	case "get":
-		return starlark.NewBuiltin("get", rgw.get), nil
-	case "post":
-		return starlark.NewBuiltin("post", rgw.post), nil
-	case "put":
-		return starlark.NewBuiltin("put", rgw.put), nil
-	case "delete":
-		return starlark.NewBuiltin("delete", rgw.delete), nil
-	case "patch":
-		return starlark.NewBuiltin("patch", rgw.patch), nil
-	case "options":
-		return starlark.NewBuiltin("options", rgw.options), nil
-	case "head":
-		return starlark.NewBuiltin("head", rgw.head), nil
-	default:
-		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rgw.Type(), name))
-	}
-}
-
-func (rgw *RouteGroupWrapper) AttrNames() []string {
-	return []string{"get", "post", "put", "delete", "patch", "options", "head"}
-}
-
-// RouteGroup builtin methods
-
-func (rgw *RouteGroupWrapper) get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Get(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) post(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Post(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) put(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Put(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) delete(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Delete(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) patch(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Patch(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) options(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Options(path, handler)
-}
-
-func (rgw *RouteGroupWrapper) head(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var path string
-	var handler starlark.Callable
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
-		return nil, err
-	}
-	return starlark.None, rgw.group.Head(path, handler)
-}
-
-// RequestWrapper wraps the Request struct to provide Starlark-compatible field names
-type RequestWrapper struct {
-	request *Request
-}
-
-func (rw *RequestWrapper) String() string {
-	return fmt.Sprintf("<web.Request method=%s path=%s>", rw.request.Method, rw.request.Path)
-}
-
-func (rw *RequestWrapper) Type() string {
-	return "web.Request"
-}
-
-func (rw *RequestWrapper) Freeze() {
-	// Request is immutable after creation
-}
-
-func (rw *RequestWrapper) Truth() starlark.Bool {
-	return starlark.True
-}
-
-func (rw *RequestWrapper) Hash() (uint32, error) {
-	return 0, fmt.Errorf("unhashable type: %s", rw.Type())
-}
-
-func (rw *RequestWrapper) Attr(name string) (starlark.Value, error) {
-	switch name {
-	case "method":
-		return starlark.String(rw.request.Method), nil
-	case "url":
-		return starlark.String(rw.request.URL), nil
-	case "path":
-		return starlark.String(rw.request.Path), nil
-	case "host":
-		return starlark.String(rw.request.Host), nil
-	case "remote":
-		return starlark.String(rw.request.Remote), nil
-	case "client_ip":
-		return starlark.String(rw.request.ClientIP), nil
-	case "proto":
-		return starlark.String(rw.request.Proto), nil
-	case "headers":
-		val, err := convert.ToValue(rw.request.Headers)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
-	case "query":
-		val, err := convert.ToValue(rw.request.Query)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
-	case "context":
-		val, err := convert.ToValue(rw.request.Context)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
-	case "body":
-		return starlark.NewBuiltin("body", rw.bodyMethod), nil
-	case "json":
-		return starlark.NewBuiltin("json", rw.jsonMethod), nil
-	case "form":
-		return starlark.NewBuiltin("form", rw.formMethod), nil
-	case "files":
-		return starlark.NewBuiltin("files", rw.filesMethod), nil
-	case "cookie":
-		return starlark.NewBuiltin("cookie", rw.cookieMethod), nil
-	case "param":
-		return starlark.NewBuiltin("param", rw.paramMethod), nil
-	case "get_header":
-		return starlark.NewBuiltin("get_header", rw.getHeaderMethod), nil
-	case "bearer_token":
-		return starlark.NewBuiltin("bearer_token", rw.bearerTokenMethod), nil
-	case "basic_auth":
-		return starlark.NewBuiltin("basic_auth", rw.basicAuthMethod), nil
-	default:
-		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
-	}
-}
-
-func (rw *RequestWrapper) AttrNames() []string {
-	return []string{
-		"method", "url", "path", "host", "remote", "client_ip", "proto",
-		"headers", "query", "context", "body", "json", "form", "files",
-		"cookie", "param", "get_header", "bearer_token", "basic_auth",
-	}
-}
-
-// bodyMethod handles the body() method call
-func (rw *RequestWrapper) bodyMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if rw.request.ginCtx == nil {
-		return starlark.String(""), nil
-	}
-
-	body, err := rw.request.ginCtx.GetRawData()
-	if err != nil {
-		return starlark.String(""), nil
-	}
-
-	return starlark.String(string(body)), nil
-}
-
-// jsonMethod handles the json() method call
-func (rw *RequestWrapper) jsonMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if args.Len() != 0 {
-		return nil, fmt.Errorf("json() takes no arguments")
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	body, err := rw.request.ginCtx.GetRawData()
-	if err != nil {
-		return starlark.None, nil
-	}
-
-	// Try to parse as JSON using the existing dataconv package
-	jsonValue, err := dataconv.DecodeStarlarkJSON(body)
-	if err != nil {
-		return starlark.None, nil
-	}
-
-	return jsonValue, nil
-}
-
-// formMethod handles the form() method call
-func (rw *RequestWrapper) formMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if args.Len() != 0 {
-		return nil, fmt.Errorf("form() takes no arguments")
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.NewDict(0), nil
-	}
-
-	// Parse form data
-	if err := rw.request.ginCtx.Request.ParseForm(); err != nil {
-		return starlark.NewDict(0), nil
-	}
-
-	form := starlark.NewDict(len(rw.request.ginCtx.Request.Form))
-	for key, values := range rw.request.ginCtx.Request.Form {
-		if len(values) == 1 {
-			form.SetKey(starlark.String(key), starlark.String(values[0]))
-		} else {
-			// Multiple values - create a list
-			list := make([]starlark.Value, len(values))
-			for i, v := range values {
-				list[i] = starlark.String(v)
-			}
-			form.SetKey(starlark.String(key), starlark.NewList(list))
-		}
-	}
-
-	return form, nil
-}
-
-// filesMethod handles the files() method call
-func (rw *RequestWrapper) filesMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if args.Len() != 0 {
-		return nil, fmt.Errorf("files() takes no arguments")
-	}
-
-	// Return empty dict for now - file upload handling to be implemented
-	return starlark.NewDict(0), nil
-}
-
-// cookieMethod handles the cookie() method call
-func (rw *RequestWrapper) cookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name string
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
-		return nil, err
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	cookie, err := rw.request.ginCtx.Request.Cookie(name)
-	if err != nil {
-		return starlark.None, nil
-	}
-
-	return starlark.String(cookie.Value), nil
-}
-
-// paramMethod handles the param(name) method call
-func (rw *RequestWrapper) paramMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name string
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
-		return nil, err
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	value := rw.request.ginCtx.Param(name)
-	if value == "" {
-		return starlark.None, nil
-	}
-
-	return starlark.String(value), nil
-}
-
-// getHeaderMethod handles the get_header() method call
-func (rw *RequestWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		name         string
-		defaultValue starlark.Value = starlark.None
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"name", &name,
-		"default?", &defaultValue,
-	); err != nil {
-		return nil, err
-	}
-
-	if rw.request.ginCtx == nil {
-		return defaultValue, nil
-	}
-
-	value := rw.request.ginCtx.GetHeader(name)
-	if value == "" {
-		return defaultValue, nil
-	}
-
-	return starlark.String(value), nil
-}
-
-// bearerTokenMethod handles the bearer_token() method call
-func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if args.Len() != 0 {
-		return nil, fmt.Errorf("bearer_token() takes no arguments")
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	auth := rw.request.ginCtx.GetHeader("Authorization")
-	if auth == "" {
-		return starlark.None, nil
-	}
-
-	const prefix = "Bearer "
-	if !strings.HasPrefix(auth, prefix) {
-		return starlark.None, nil
-	}
-
-	return starlark.String(auth[len(prefix):]), nil
-}
-
-// basicAuthMethod handles the basic_auth() method call
-func (rw *RequestWrapper) basicAuthMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if args.Len() != 0 {
-		return nil, fmt.Errorf("basic_auth() takes no arguments")
-	}
-
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	username, password, ok := rw.request.ginCtx.Request.BasicAuth()
-	if !ok {
-		return starlark.None, nil
-	}
-
-	// Return tuple of (username, password)
-	return starlark.Tuple{starlark.String(username), starlark.String(password)}, nil
 }

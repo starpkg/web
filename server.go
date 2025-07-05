@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strconv"
 	"time"
 
@@ -78,7 +77,7 @@ func (s *Server) Route(methods interface{}, path string, handler starlark.Callab
 // addRoute adds a route to the gin engine
 func (s *Server) addRoute(method, path string, handler starlark.Callable) error {
 	// Convert {param} style to :param style for Gin
-	ginPath := s.convertPathParams(path)
+	ginPath := convertPathParams(path)
 	ginHandler := s.wrapHandler(handler)
 
 	switch method {
@@ -131,8 +130,8 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 		// Fallback: try to convert using starlight
 		responseInterface := convert.FromValue(result)
 		if response, ok := responseInterface.(*Response); ok {
-			// Convert old Response to HTTPResponse
-			httpResp := &HTTPResponse{
+			// Convert old Response to Response
+			httpResp := &Response{
 				StatusCode: response.StatusCode,
 				Headers:    response.Headers,
 				Body:       response.Body,
@@ -179,8 +178,8 @@ func (s *Server) createRequest(c *gin.Context) *Request {
 	}
 }
 
-// applyResponse applies an HTTPResponse object to gin context
-func (s *Server) applyResponse(c *gin.Context, response *HTTPResponse) {
+// applyResponse applies a Response object to gin context
+func (s *Server) applyResponse(c *gin.Context, response *Response) {
 	// Set headers
 	for key, value := range response.Headers {
 		c.Header(key, value)
@@ -282,83 +281,4 @@ func (s *Server) Group(prefix string) *RouteGroup {
 		ginGroup: ginGroup,
 		prefix:   prefix,
 	}
-}
-
-// RouteGroup represents a group of routes with a common prefix.
-// Route groups allow for organized route registration and can have
-// middleware applied specifically to the grouped routes.
-type RouteGroup struct {
-	server   *Server
-	ginGroup *gin.RouterGroup
-	prefix   string
-}
-
-// Get adds a GET route to the group
-func (rg *RouteGroup) Get(path string, handler starlark.Callable) error {
-	return rg.addRoute("GET", path, handler)
-}
-
-// Post adds a POST route to the group
-func (rg *RouteGroup) Post(path string, handler starlark.Callable) error {
-	return rg.addRoute("POST", path, handler)
-}
-
-// Put adds a PUT route to the group
-func (rg *RouteGroup) Put(path string, handler starlark.Callable) error {
-	return rg.addRoute("PUT", path, handler)
-}
-
-// Delete adds a DELETE route to the group
-func (rg *RouteGroup) Delete(path string, handler starlark.Callable) error {
-	return rg.addRoute("DELETE", path, handler)
-}
-
-// Patch adds a PATCH route to the group
-func (rg *RouteGroup) Patch(path string, handler starlark.Callable) error {
-	return rg.addRoute("PATCH", path, handler)
-}
-
-// Options adds an OPTIONS route to the group
-func (rg *RouteGroup) Options(path string, handler starlark.Callable) error {
-	return rg.addRoute("OPTIONS", path, handler)
-}
-
-// Head adds a HEAD route to the group
-func (rg *RouteGroup) Head(path string, handler starlark.Callable) error {
-	return rg.addRoute("HEAD", path, handler)
-}
-
-// addRoute adds a route to the gin group
-func (rg *RouteGroup) addRoute(method, path string, handler starlark.Callable) error {
-	// Convert {param} style to :param style for Gin
-	ginPath := rg.server.convertPathParams(path)
-	ginHandler := rg.server.wrapHandler(handler)
-
-	switch method {
-	case "GET":
-		rg.ginGroup.GET(ginPath, ginHandler)
-	case "POST":
-		rg.ginGroup.POST(ginPath, ginHandler)
-	case "PUT":
-		rg.ginGroup.PUT(ginPath, ginHandler)
-	case "DELETE":
-		rg.ginGroup.DELETE(ginPath, ginHandler)
-	case "PATCH":
-		rg.ginGroup.PATCH(ginPath, ginHandler)
-	case "OPTIONS":
-		rg.ginGroup.OPTIONS(ginPath, ginHandler)
-	case "HEAD":
-		rg.ginGroup.HEAD(ginPath, ginHandler)
-	default:
-		return fmt.Errorf("unsupported HTTP method: %s", method)
-	}
-
-	return nil
-}
-
-// convertPathParams converts {param} style to :param style for Gin
-func (s *Server) convertPathParams(path string) string {
-	// Use regex to replace {param} with :param
-	re := regexp.MustCompile(`\{([^}]+)\}`)
-	return re.ReplaceAllString(path, ":$1")
 }

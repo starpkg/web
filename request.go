@@ -1,0 +1,373 @@
+package web
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/1set/starlet/dataconv"
+	"github.com/1set/starlight/convert"
+	"github.com/gin-gonic/gin"
+	"go.starlark.net/starlark"
+)
+
+// Request represents an HTTP request.
+// This structure holds the complete request data including method, URL, headers,
+// query parameters, and provides access to the underlying gin context for
+// advanced request processing.
+type Request struct {
+	Method   string                 `json:"method"`
+	URL      string                 `json:"url"`
+	Path     string                 `json:"path"`
+	Host     string                 `json:"host"`
+	Remote   string                 `json:"remote"`
+	ClientIP string                 `json:"client_ip"`
+	Proto    string                 `json:"proto"`
+	Headers  map[string]string      `json:"headers"`
+	Query    map[string]string      `json:"query"`
+	Context  map[string]interface{} `json:"context"`
+	ginCtx   *gin.Context           // Internal gin context
+}
+
+// createRequestFromGin creates a Request from a gin.Context.
+// This function extracts all relevant request information from the gin context
+// and creates a Request struct that can be used in Starlark handlers.
+func createRequestFromGin(c *gin.Context) *Request {
+	// Extract headers
+	headers := make(map[string]string)
+	for key, values := range c.Request.Header {
+		if len(values) > 0 {
+			headers[key] = values[0]
+		}
+	}
+
+	// Extract query parameters
+	query := make(map[string]string)
+	for key, values := range c.Request.URL.Query() {
+		if len(values) > 0 {
+			query[key] = values[0]
+		}
+	}
+
+	// Create context map for middleware data
+	context := make(map[string]interface{})
+
+	return &Request{
+		Method:   c.Request.Method,
+		URL:      c.Request.URL.String(),
+		Path:     c.Request.URL.Path,
+		Host:     c.Request.Host,
+		Remote:   c.Request.RemoteAddr,
+		ClientIP: c.ClientIP(),
+		Proto:    c.Request.Proto,
+		Headers:  headers,
+		Query:    query,
+		Context:  context,
+		ginCtx:   c,
+	}
+}
+
+// RequestWrapper wraps the Request struct to provide Starlark-compatible interface.
+// This wrapper exposes request properties and methods to Starlark scripts,
+// allowing access to request data, headers, parameters, and body content.
+type RequestWrapper struct {
+	request *Request
+}
+
+// NewRequestWrapper creates a new RequestWrapper.
+// This function wraps a Request to make it accessible from Starlark
+// with proper attribute access and method calls.
+func NewRequestWrapper(request *Request) *RequestWrapper {
+	return &RequestWrapper{request: request}
+}
+
+// String returns a string representation of the request.
+func (rw *RequestWrapper) String() string {
+	return fmt.Sprintf("<web.Request method=%s path=%s>", rw.request.Method, rw.request.Path)
+}
+
+// Type returns the Starlark type name.
+func (rw *RequestWrapper) Type() string {
+	return "web.Request"
+}
+
+// Freeze makes the request immutable (required by Starlark).
+func (rw *RequestWrapper) Freeze() {
+	// Request is immutable after creation
+}
+
+// Truth returns the truth value of the request (always true).
+func (rw *RequestWrapper) Truth() starlark.Bool {
+	return starlark.True
+}
+
+// Hash returns a hash of the request (not supported).
+func (rw *RequestWrapper) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", rw.Type())
+}
+
+// Attr returns the value of a request attribute.
+// This method provides access to request properties and methods from Starlark.
+func (rw *RequestWrapper) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "method":
+		return starlark.String(rw.request.Method), nil
+	case "url":
+		return starlark.String(rw.request.URL), nil
+	case "path":
+		return starlark.String(rw.request.Path), nil
+	case "host":
+		return starlark.String(rw.request.Host), nil
+	case "remote":
+		return starlark.String(rw.request.Remote), nil
+	case "client_ip":
+		return starlark.String(rw.request.ClientIP), nil
+	case "proto":
+		return starlark.String(rw.request.Proto), nil
+	case "headers":
+		val, err := convert.ToValue(rw.request.Headers)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
+	case "query":
+		val, err := convert.ToValue(rw.request.Query)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
+	case "context":
+		val, err := convert.ToValue(rw.request.Context)
+		if err != nil {
+			return nil, err
+		}
+		return val, nil
+	case "body":
+		return starlark.NewBuiltin("body", rw.bodyMethod), nil
+	case "json":
+		return starlark.NewBuiltin("json", rw.jsonMethod), nil
+	case "form":
+		return starlark.NewBuiltin("form", rw.formMethod), nil
+	case "files":
+		return starlark.NewBuiltin("files", rw.filesMethod), nil
+	case "cookie":
+		return starlark.NewBuiltin("cookie", rw.cookieMethod), nil
+	case "param":
+		return starlark.NewBuiltin("param", rw.paramMethod), nil
+	case "get_header":
+		return starlark.NewBuiltin("get_header", rw.getHeaderMethod), nil
+	case "bearer_token":
+		return starlark.NewBuiltin("bearer_token", rw.bearerTokenMethod), nil
+	case "basic_auth":
+		return starlark.NewBuiltin("basic_auth", rw.basicAuthMethod), nil
+	default:
+		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
+	}
+}
+
+// AttrNames returns the list of available attributes.
+func (rw *RequestWrapper) AttrNames() []string {
+	return []string{
+		"method", "url", "path", "host", "remote", "client_ip", "proto",
+		"headers", "query", "context", "body", "json", "form", "files",
+		"cookie", "param", "get_header", "bearer_token", "basic_auth",
+	}
+}
+
+// bodyMethod returns the raw request body as a string.
+// This method provides access to the complete request body content.
+func (rw *RequestWrapper) bodyMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.String(""), nil
+	}
+
+	body, err := rw.request.ginCtx.GetRawData()
+	if err != nil {
+		return starlark.String(""), nil
+	}
+
+	return starlark.String(string(body)), nil
+}
+
+// jsonMethod parses the request body as JSON and returns the parsed data.
+// This method automatically handles JSON parsing and returns appropriate Starlark values.
+func (rw *RequestWrapper) jsonMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	body, err := rw.request.ginCtx.GetRawData()
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	if len(body) == 0 {
+		return starlark.None, nil
+	}
+
+	// Try to parse as JSON using the existing dataconv package
+	jsonValue, err := dataconv.DecodeStarlarkJSON(body)
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	return jsonValue, nil
+}
+
+// formMethod parses form data from the request body.
+// This method handles both URL-encoded and multipart form data.
+func (rw *RequestWrapper) formMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.NewDict(0), nil
+	}
+
+	// Parse form data
+	if err := rw.request.ginCtx.Request.ParseForm(); err != nil {
+		return starlark.NewDict(0), nil
+	}
+
+	form := starlark.NewDict(len(rw.request.ginCtx.Request.Form))
+	for key, values := range rw.request.ginCtx.Request.Form {
+		if len(values) == 1 {
+			form.SetKey(starlark.String(key), starlark.String(values[0]))
+		} else {
+			// Multiple values - create a list
+			list := make([]starlark.Value, len(values))
+			for i, v := range values {
+				list[i] = starlark.String(v)
+			}
+			form.SetKey(starlark.String(key), starlark.NewList(list))
+		}
+	}
+
+	return form, nil
+}
+
+// filesMethod returns uploaded files from multipart form data.
+// This method provides access to file uploads in the request.
+func (rw *RequestWrapper) filesMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	// TODO: Implement file upload handling
+	// For now, return empty dict
+	return starlark.NewDict(0), nil
+}
+
+// cookieMethod returns the value of a specific cookie.
+// This method provides access to HTTP cookies sent with the request.
+func (rw *RequestWrapper) cookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	cookie, err := rw.request.ginCtx.Cookie(name)
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	return starlark.String(cookie), nil
+}
+
+// paramMethod returns the value of a path parameter.
+// This method extracts parameters from the URL path (e.g., /users/{id}).
+func (rw *RequestWrapper) paramMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	param := rw.request.ginCtx.Param(name)
+	if param == "" {
+		return starlark.None, nil
+	}
+
+	return starlark.String(param), nil
+}
+
+// getHeaderMethod returns the value of a specific header with optional default.
+// This method provides access to HTTP headers sent with the request.
+func (rw *RequestWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	var defaultValue starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name, "default?", &defaultValue); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return defaultValue, nil
+	}
+
+	headerValue := rw.request.ginCtx.GetHeader(name)
+	if headerValue == "" {
+		return defaultValue, nil
+	}
+
+	return starlark.String(headerValue), nil
+}
+
+// bearerTokenMethod extracts the Bearer token from the Authorization header.
+// This method provides convenient access to Bearer authentication tokens.
+func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	authHeader := rw.request.ginCtx.GetHeader("Authorization")
+	if authHeader == "" {
+		return starlark.None, nil
+	}
+
+	// Check if it's a Bearer token
+	const bearerPrefix = "Bearer "
+	if !strings.HasPrefix(authHeader, bearerPrefix) {
+		return starlark.None, nil
+	}
+
+	token := strings.TrimPrefix(authHeader, bearerPrefix)
+	return starlark.String(token), nil
+}
+
+// basicAuthMethod extracts username and password from Basic authentication.
+// This method returns a tuple of (username, password) or None if not present.
+func (rw *RequestWrapper) basicAuthMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	username, password, ok := rw.request.ginCtx.Request.BasicAuth()
+	if !ok {
+		return starlark.None, nil
+	}
+
+	return starlark.Tuple{starlark.String(username), starlark.String(password)}, nil
+}

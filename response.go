@@ -6,27 +6,27 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// HTTPResponse represents an HTTP response (internal type).
+// Response represents an HTTP response.
 // This structure holds the complete response data including status code,
 // headers, body content, and optional file path for file responses.
-type HTTPResponse struct {
+type Response struct {
 	StatusCode int               `json:"status_code"`
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
 	FilePath   string            `json:"file_path,omitempty"`
 }
 
-// ResponseWrapper wraps the HTTPResponse struct to provide Starlark-compatible interface.
+// ResponseWrapper wraps the Response struct to provide Starlark-compatible interface.
 // This wrapper exposes response properties and methods to Starlark scripts,
 // allowing manipulation of cookies and access to response metadata.
 type ResponseWrapper struct {
-	response *HTTPResponse
+	response *Response
 }
 
 // NewResponseWrapper creates a new ResponseWrapper.
-// This function wraps an HTTPResponse to make it accessible from Starlark
+// This function wraps a Response to make it accessible from Starlark
 // with proper attribute access and method calls.
-func NewResponseWrapper(response *HTTPResponse) *ResponseWrapper {
+func NewResponseWrapper(response *Response) *ResponseWrapper {
 	return &ResponseWrapper{response: response}
 }
 
