@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -16,7 +15,7 @@ import (
 // authMiddlewareFactory creates a standardized authentication middleware builtin
 // This eliminates code duplication across different authentication types
 func authMiddlewareFactory(middlewareFunc MiddlewareFunc) (starlark.Value, error) {
-	result, err := convert.ToValue(middlewareFunc)
+	result, err := dataconv.Marshal(middlewareFunc)
 	if err != nil {
 		return none, fmt.Errorf("failed to marshal auth middleware: %v", err)
 	}
@@ -40,10 +39,82 @@ func NewBasicAuth(users map[string]string, realm string) *BasicAuth {
 // Struct returns a Starlark struct representation of the BasicAuth
 func (ba *BasicAuth) Struct() *starlarkstruct.Struct {
 	sd := starlark.StringDict{
-		"middleware": starlark.NewBuiltin("middleware", ba.Middleware),
-		"validate":   starlark.NewBuiltin("validate", ba.Validate),
+		"middleware":   starlark.NewBuiltin("middleware", ba.Middleware),
+		"validate":     starlark.NewBuiltin("validate", ba.Validate),
+		"authenticate": starlark.NewBuiltin("authenticate", ba.Authenticate),
 	}
 	return starlarkstruct.FromStringDict(starlark.String("BasicAuth"), sd)
+}
+
+// Authenticate validates basic authentication for a request and returns result
+func (ba *BasicAuth) Authenticate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var request starlark.Value
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"request", &request,
+	); err != nil {
+		return none, err
+	}
+
+	// Extract authorization header using request's get_header method
+	var authHeader string
+	if requestStruct, ok := request.(*starlarkstruct.Struct); ok {
+		if getHeaderFunc, err := requestStruct.Attr("get_header"); err == nil {
+			if callable, ok := getHeaderFunc.(starlark.Callable); ok {
+				result, err := starlark.Call(thread, callable, starlark.Tuple{starlark.String("Authorization")}, nil)
+				if err == nil && result != starlark.None {
+					authHeader = result.String()
+					// Remove quotes if present
+					if strings.HasPrefix(authHeader, "\"") && strings.HasSuffix(authHeader, "\"") {
+						authHeader = strings.Trim(authHeader, "\"")
+					}
+				}
+			}
+		}
+	}
+
+	if authHeader == "" {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Parse basic auth
+	if !strings.HasPrefix(authHeader, "Basic ") {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	encoded := authHeader[6:]
+	decoded, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	parts := strings.SplitN(string(decoded), ":", 2)
+	if len(parts) != 2 {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	username, password := parts[0], parts[1]
+
+	// Check credentials
+	if correctPassword, exists := ba.users[username]; !exists || correctPassword != password {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Return success result
+	result := starlark.NewDict(2)
+	result.SetKey(starlark.String("authenticated"), starlark.True)
+	result.SetKey(starlark.String("user"), starlark.String(username))
+	return result, nil
 }
 
 // Validate validates username and password credentials
@@ -131,12 +202,7 @@ func basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple
 		users: usersMap,
 		realm: realm.GoString(),
 	}
-
-	result, err := convert.ToValue(basicAuth)
-	if err != nil {
-		return none, fmt.Errorf("failed to marshal basic auth: %v", err)
-	}
-	return result, nil
+	return basicAuth.Struct(), nil
 }
 
 // BearerAuth represents a bearer token authentication handler
@@ -154,10 +220,75 @@ func NewBearerAuth(validateFunc starlark.Callable) *BearerAuth {
 // Struct returns a Starlark struct representation of the BearerAuth
 func (ba *BearerAuth) Struct() *starlarkstruct.Struct {
 	sd := starlark.StringDict{
-		"middleware": starlark.NewBuiltin("middleware", ba.Middleware),
-		"validate":   starlark.NewBuiltin("validate", ba.ValidateToken),
+		"middleware":   starlark.NewBuiltin("middleware", ba.Middleware),
+		"validate":     starlark.NewBuiltin("validate", ba.ValidateToken),
+		"authenticate": starlark.NewBuiltin("authenticate", ba.Authenticate),
 	}
 	return starlarkstruct.FromStringDict(starlark.String("BearerAuth"), sd)
+}
+
+// Authenticate validates bearer authentication for a request and returns result
+func (ba *BearerAuth) Authenticate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var request starlark.Value
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"request", &request,
+	); err != nil {
+		return none, err
+	}
+
+	// Extract authorization header using request's get_header method
+	var authHeader string
+	if requestStruct, ok := request.(*starlarkstruct.Struct); ok {
+		if getHeaderFunc, err := requestStruct.Attr("get_header"); err == nil {
+			if callable, ok := getHeaderFunc.(starlark.Callable); ok {
+				result, err := starlark.Call(thread, callable, starlark.Tuple{starlark.String("Authorization")}, nil)
+				if err == nil && result != starlark.None {
+					authHeader = result.String()
+					// Remove quotes if present
+					if strings.HasPrefix(authHeader, "\"") && strings.HasSuffix(authHeader, "\"") {
+						authHeader = strings.Trim(authHeader, "\"")
+					}
+				}
+			}
+		}
+	}
+
+	if authHeader == "" {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Check for Bearer token
+	if !strings.HasPrefix(authHeader, "Bearer ") {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	token := authHeader[7:]
+
+	// Validate token
+	tokenResult, err := starlark.Call(thread, ba.validateFunc, starlark.Tuple{starlark.String(token)}, nil)
+	if err != nil {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Check if token is valid (not None)
+	if tokenResult == starlark.None {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Return success result
+	result := starlark.NewDict(2)
+	result.SetKey(starlark.String("authenticated"), starlark.True)
+	result.SetKey(starlark.String("user"), tokenResult)
+	return result, nil
 }
 
 // ValidateToken validates a bearer token
@@ -217,27 +348,6 @@ func (ba *BearerAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, a
 	return authMiddlewareFactory(middleware)
 }
 
-// bearer_auth creates a bearer token authentication handler
-func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var validateFunc starlark.Callable
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"validate_func", &validateFunc,
-	); err != nil {
-		return none, err
-	}
-
-	bearerAuth := &BearerAuth{
-		validateFunc: validateFunc,
-	}
-
-	result, err := convert.ToValue(bearerAuth)
-	if err != nil {
-		return none, fmt.Errorf("failed to marshal bearer auth: %v", err)
-	}
-	return result, nil
-}
-
 // APIKeyAuth represents an API key authentication handler
 type APIKeyAuth struct {
 	keys   []string
@@ -255,10 +365,58 @@ func NewAPIKeyAuth(keys []string, header string) *APIKeyAuth {
 // Struct returns a Starlark struct representation of the APIKeyAuth
 func (aka *APIKeyAuth) Struct() *starlarkstruct.Struct {
 	sd := starlark.StringDict{
-		"middleware": starlark.NewBuiltin("middleware", aka.Middleware),
-		"validate":   starlark.NewBuiltin("validate", aka.ValidateKey),
+		"middleware":   starlark.NewBuiltin("middleware", aka.Middleware),
+		"validate":     starlark.NewBuiltin("validate", aka.ValidateKey),
+		"authenticate": starlark.NewBuiltin("authenticate", aka.Authenticate),
 	}
 	return starlarkstruct.FromStringDict(starlark.String("APIKeyAuth"), sd)
+}
+
+// Authenticate validates API key authentication for a request and returns result
+func (aka *APIKeyAuth) Authenticate(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var request starlark.Value
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"request", &request,
+	); err != nil {
+		return none, err
+	}
+
+	// Extract API key header using request's get_header method
+	var apiKey string
+	if requestStruct, ok := request.(*starlarkstruct.Struct); ok {
+		if getHeaderFunc, err := requestStruct.Attr("get_header"); err == nil {
+			if callable, ok := getHeaderFunc.(starlark.Callable); ok {
+				result, err := starlark.Call(thread, callable, starlark.Tuple{starlark.String(aka.header)}, nil)
+				if err == nil && result != starlark.None {
+					apiKey = result.String()
+					// Remove quotes if present
+					if strings.HasPrefix(apiKey, "\"") && strings.HasSuffix(apiKey, "\"") {
+						apiKey = strings.Trim(apiKey, "\"")
+					}
+				}
+			}
+		}
+	}
+
+	if apiKey == "" {
+		result := starlark.NewDict(1)
+		result.SetKey(starlark.String("authenticated"), starlark.False)
+		return result, nil
+	}
+
+	// Validate API key
+	valid := false
+	for _, key := range aka.keys {
+		if key == apiKey {
+			valid = true
+			break
+		}
+	}
+
+	result := starlark.NewDict(1)
+	result.SetKey(starlark.String("authenticated"), starlark.Bool(valid))
+	return result, nil
 }
 
 // ValidateKey validates an API key
@@ -313,6 +471,23 @@ func (aka *APIKeyAuth) Middleware(thread *starlark.Thread, b *starlark.Builtin, 
 	return authMiddlewareFactory(middleware)
 }
 
+// bearer_auth creates a bearer token authentication handler
+func bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var validateFunc starlark.Callable
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"validate_func", &validateFunc,
+	); err != nil {
+		return none, err
+	}
+
+	bearerAuth := &BearerAuth{
+		validateFunc: validateFunc,
+	}
+
+	return bearerAuth.Struct(), nil
+}
+
 // api_key_auth creates an API key authentication handler
 func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
@@ -338,9 +513,5 @@ func apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tupl
 		header: header.GoString(),
 	}
 
-	result, err := convert.ToValue(apiKeyAuth)
-	if err != nil {
-		return none, fmt.Errorf("failed to marshal API key auth: %v", err)
-	}
-	return result, nil
+	return apiKeyAuth.Struct(), nil
 }

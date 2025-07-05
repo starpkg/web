@@ -467,68 +467,17 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 // basicAuth creates a basic HTTP authentication validator
 func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var users *starlark.Dict
-	var realm starlark.String
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"users", &users,
-		"realm?", &realm,
-	); err != nil {
-		return none, err
-	}
-
-	// Convert users dict to Go map using helper
-	userMap := starlarkDictToStringMap(users)
-
-	// Create authenticator
-	auth := &BasicAuth{
-		users: userMap,
-		realm: realm.GoString(),
-	}
-
-	return auth.Struct(), nil
+	return basicAuth(thread, b, args, kwargs)
 }
 
 // bearerAuth creates a bearer token authentication validator
 func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var validateFunc *starlark.Function
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"validate_func", &validateFunc,
-	); err != nil {
-		return none, err
-	}
-
-	// Create authenticator
-	auth := &BearerAuth{
-		validateFunc: validateFunc,
-	}
-
-	return auth.Struct(), nil
+	return bearerAuth(thread, b, args, kwargs)
 }
 
 // apiKeyAuth creates an API key authentication validator
 func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var keys *starlark.List
-	var header starlark.String
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"keys", &keys,
-		"header?", &header,
-	); err != nil {
-		return none, err
-	}
-
-	// Convert keys list to Go slice using helper
-	keySlice := starlarkListToStringSlice(keys)
-
-	// Create authenticator
-	auth := &APIKeyAuth{
-		keys:   keySlice,
-		header: header.GoString(),
-	}
-
-	return auth.Struct(), nil
+	return apiKeyAuth(thread, b, args, kwargs)
 }
 
 // sessionMiddleware creates a session middleware
