@@ -271,8 +271,8 @@ server.use_for(path_pattern, middleware_func)           # Path-specific middlewa
 server.error_handler(status_codes, handler)             # status_codes can be int or list of ints
 
 # Lifecycle
-server.run()              # Blocking
-server.start_background() # Non-blocking
+server.run()    # Blocking
+server.start()  # Non-blocking
 server.stop()
 server.is_running() -> bool
 ```

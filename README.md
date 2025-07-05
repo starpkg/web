@@ -13,12 +13,11 @@ Build modern web applications with Flask-like simplicity and Go performance. The
 🚀 **High Performance** - Built on Go's `net/http` for production-ready performance  
 🛡️ **Security by Default** - Built-in protection against common vulnerabilities  
 🔧 **Flask-inspired API** - Familiar patterns adapted for Starlark constraints  
-⚡ **Zero Dependencies** - Uses only Go standard library for maximum reliability  
+📁 **Static Files** - Efficient static file serving with caching  
+🎯 **Path Parameters** - Express-style route parameters and wildcards  
 🔌 **Middleware System** - Flexible middleware pipeline with built-in middleware  
 🍪 **Session Management** - Secure session handling with encryption  
 🔐 **Authentication** - Built-in Basic, Bearer, and API key authentication  
-📁 **Static Files** - Efficient static file serving with caching  
-🎯 **Path Parameters** - Express-style route parameters and wildcards  
 
 ## Quick Start
 
