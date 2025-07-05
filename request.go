@@ -24,8 +24,8 @@ func (r *Request) Body() string {
 	return string(body)
 }
 
-// Json parses the request body as JSON and returns a Starlark value
-func (r *Request) Json() starlark.Value {
+// JSON parses the request body as JSON and returns a Starlark value
+func (r *Request) JSON() starlark.Value {
 	if r.ginCtx == nil {
 		return starlark.None
 	}
@@ -36,7 +36,7 @@ func (r *Request) Json() starlark.Value {
 	}
 
 	// Try to parse as JSON
-	jsonValue, err := dataconv.UnmarshalStarlarkJSON([]byte(body))
+	jsonValue, err := dataconv.DecodeStarlarkJSON([]byte(body))
 	if err != nil {
 		return starlark.None
 	}
