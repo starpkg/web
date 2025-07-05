@@ -1,9 +1,12 @@
 // Package web provides a Starlark module for server-side web applications.
+// It offers a Flask-inspired API for building HTTP servers with routing, middleware,
+// request/response handling, and session management capabilities.
 package web
 
 import (
 	"fmt"
 	"net/http"
+	"strings"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -37,7 +40,10 @@ type Module struct {
 	ext    *base.ConfigurableModuleExt
 }
 
-// NewModule creates a new instance of Module with default configurations
+// NewModule creates a new instance of Module with default configurations.
+// This is the primary entry point for creating a web module that can be loaded
+// into a Starlark environment. The module provides functions for creating HTTP servers,
+// handling requests and responses, and managing web application lifecycle.
 func NewModule() *Module {
 	return newModuleWithOptions(
 		genConfigOption(configKeyHost, "Default host to bind to", "localhost"),
@@ -85,7 +91,9 @@ func newModuleWithOptions(
 	}
 }
 
-// LoadModule returns the Starlark module loader with web-specific functions
+// LoadModule returns the Starlark module loader with web-specific functions.
+// This method provides the complete set of web module functions that can be
+// called from Starlark scripts, including server creation and response builders.
 func (m *Module) LoadModule() starlet.ModuleLoader {
 	// Module functions
 	additionalFuncs := starlark.StringDict{
@@ -101,7 +109,9 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
 
-// createServer is a Starlark function that creates a new HTTP server
+// createServer is a Starlark function that creates a new HTTP server.
+// It accepts optional host and port parameters and returns a ServerWrapper
+// that provides Starlark-compatible methods for route registration and server lifecycle.
 func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		host = starlark.String("")
@@ -155,7 +165,7 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 	// Configure method not allowed handler
 	engine.HandleMethodNotAllowed = true
 	engine.NoMethod(func(c *gin.Context) {
-		c.JSON(405, gin.H{"error": "Method not allowed"})
+		sendMethodNotAllowed(c, "Method not allowed")
 	})
 
 	// Create server instance
@@ -173,7 +183,9 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 
 // Response builders
 
-// response creates a basic HTTP response
+// response creates a basic HTTP response.
+// This function constructs an HTTP response with the specified body, status code,
+// and headers. It returns a ResponseWrapper that can be returned from route handlers.
 func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		body    = starlark.String("")
@@ -204,15 +216,18 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 		headerMap[string(key)] = string(value)
 	}
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       string(body),
 	}
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
-// jsonResponse creates a JSON HTTP response
+// jsonResponse creates a JSON HTTP response.
+// This function automatically serializes Starlark data structures to JSON
+// and sets the appropriate Content-Type header. It handles various Starlark types
+// including dicts, lists, strings, and numbers.
 func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		data    starlark.Value
@@ -260,12 +275,12 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	headerMap["Content-Type"] = "application/json"
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       bodyStr,
 	}
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // htmlResponse creates an HTML HTTP response
@@ -302,13 +317,13 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	// Set content type
 	headerMap["Content-Type"] = "text/html"
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       string(content),
 	}
 
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // redirect creates a redirect response
@@ -327,7 +342,7 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 
 	statusCode, _ := status.Int64()
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: int(statusCode),
 		Headers: map[string]string{
 			"Location": string(location),
@@ -335,7 +350,7 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 		Body: "",
 	}
 
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // errorResponse creates an error response
@@ -354,13 +369,13 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 
 	statusCode, _ := status.Int64()
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: int(statusCode),
 		Headers:    map[string]string{},
 		Body:       string(message),
 	}
 
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // sendFile creates a file response
@@ -377,7 +392,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: 200,
 		Headers:    map[string]string{},
 		Body:       "",
@@ -388,7 +403,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		response.Headers["Content-Type"] = string(contentType)
 	}
 
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // sendData creates a data response
@@ -407,7 +422,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	response := &Response{
+	response := &HTTPResponse{
 		StatusCode: 200,
 		Headers: map[string]string{
 			"Content-Type":        string(contentType),
@@ -416,7 +431,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		Body: string(data),
 	}
 
-	return convert.ToValue(response)
+	return NewResponseWrapper(response), nil
 }
 
 // Server represents an HTTP server instance
@@ -856,20 +871,132 @@ func (rw *RequestWrapper) Attr(name string) (starlark.Value, error) {
 		return val, nil
 	case "body":
 		return starlark.NewBuiltin("body", rw.bodyMethod), nil
+	case "json":
+		return starlark.NewBuiltin("json", rw.jsonMethod), nil
+	case "form":
+		return starlark.NewBuiltin("form", rw.formMethod), nil
+	case "files":
+		return starlark.NewBuiltin("files", rw.filesMethod), nil
+	case "cookie":
+		return starlark.NewBuiltin("cookie", rw.cookieMethod), nil
 	case "param":
 		return starlark.NewBuiltin("param", rw.paramMethod), nil
+	case "get_header":
+		return starlark.NewBuiltin("get_header", rw.getHeaderMethod), nil
+	case "bearer_token":
+		return starlark.NewBuiltin("bearer_token", rw.bearerTokenMethod), nil
+	case "basic_auth":
+		return starlark.NewBuiltin("basic_auth", rw.basicAuthMethod), nil
 	default:
 		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
 	}
 }
 
 func (rw *RequestWrapper) AttrNames() []string {
-	return []string{"method", "url", "path", "host", "remote", "client_ip", "proto", "headers", "query", "context", "body", "param"}
+	return []string{
+		"method", "url", "path", "host", "remote", "client_ip", "proto",
+		"headers", "query", "context", "body", "json", "form", "files",
+		"cookie", "param", "get_header", "bearer_token", "basic_auth",
+	}
 }
 
 // bodyMethod handles the body() method call
 func (rw *RequestWrapper) bodyMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return starlark.String(rw.request.Body()), nil
+	if rw.request.ginCtx == nil {
+		return starlark.String(""), nil
+	}
+
+	body, err := rw.request.ginCtx.GetRawData()
+	if err != nil {
+		return starlark.String(""), nil
+	}
+
+	return starlark.String(string(body)), nil
+}
+
+// jsonMethod handles the json() method call
+func (rw *RequestWrapper) jsonMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if args.Len() != 0 {
+		return nil, fmt.Errorf("json() takes no arguments")
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	body, err := rw.request.ginCtx.GetRawData()
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	// Try to parse as JSON using the existing dataconv package
+	jsonValue, err := dataconv.DecodeStarlarkJSON(body)
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	return jsonValue, nil
+}
+
+// formMethod handles the form() method call
+func (rw *RequestWrapper) formMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if args.Len() != 0 {
+		return nil, fmt.Errorf("form() takes no arguments")
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.NewDict(0), nil
+	}
+
+	// Parse form data
+	if err := rw.request.ginCtx.Request.ParseForm(); err != nil {
+		return starlark.NewDict(0), nil
+	}
+
+	form := starlark.NewDict(len(rw.request.ginCtx.Request.Form))
+	for key, values := range rw.request.ginCtx.Request.Form {
+		if len(values) == 1 {
+			form.SetKey(starlark.String(key), starlark.String(values[0]))
+		} else {
+			// Multiple values - create a list
+			list := make([]starlark.Value, len(values))
+			for i, v := range values {
+				list[i] = starlark.String(v)
+			}
+			form.SetKey(starlark.String(key), starlark.NewList(list))
+		}
+	}
+
+	return form, nil
+}
+
+// filesMethod handles the files() method call
+func (rw *RequestWrapper) filesMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if args.Len() != 0 {
+		return nil, fmt.Errorf("files() takes no arguments")
+	}
+
+	// Return empty dict for now - file upload handling to be implemented
+	return starlark.NewDict(0), nil
+}
+
+// cookieMethod handles the cookie() method call
+func (rw *RequestWrapper) cookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	cookie, err := rw.request.ginCtx.Request.Cookie(name)
+	if err != nil {
+		return starlark.None, nil
+	}
+
+	return starlark.String(cookie.Value), nil
 }
 
 // paramMethod handles the param(name) method call
@@ -878,5 +1005,83 @@ func (rw *RequestWrapper) paramMethod(thread *starlark.Thread, b *starlark.Built
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "name", &name); err != nil {
 		return nil, err
 	}
-	return starlark.String(rw.request.Param(name)), nil
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	value := rw.request.ginCtx.Param(name)
+	if value == "" {
+		return starlark.None, nil
+	}
+
+	return starlark.String(value), nil
+}
+
+// getHeaderMethod handles the get_header() method call
+func (rw *RequestWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		name         string
+		defaultValue starlark.Value = starlark.None
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"name", &name,
+		"default?", &defaultValue,
+	); err != nil {
+		return nil, err
+	}
+
+	if rw.request.ginCtx == nil {
+		return defaultValue, nil
+	}
+
+	value := rw.request.ginCtx.GetHeader(name)
+	if value == "" {
+		return defaultValue, nil
+	}
+
+	return starlark.String(value), nil
+}
+
+// bearerTokenMethod handles the bearer_token() method call
+func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if args.Len() != 0 {
+		return nil, fmt.Errorf("bearer_token() takes no arguments")
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	auth := rw.request.ginCtx.GetHeader("Authorization")
+	if auth == "" {
+		return starlark.None, nil
+	}
+
+	const prefix = "Bearer "
+	if !strings.HasPrefix(auth, prefix) {
+		return starlark.None, nil
+	}
+
+	return starlark.String(auth[len(prefix):]), nil
+}
+
+// basicAuthMethod handles the basic_auth() method call
+func (rw *RequestWrapper) basicAuthMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if args.Len() != 0 {
+		return nil, fmt.Errorf("basic_auth() takes no arguments")
+	}
+
+	if rw.request.ginCtx == nil {
+		return starlark.None, nil
+	}
+
+	username, password, ok := rw.request.ginCtx.Request.BasicAuth()
+	if !ok {
+		return starlark.None, nil
+	}
+
+	// Return tuple of (username, password)
+	return starlark.Tuple{starlark.String(username), starlark.String(password)}, nil
 }

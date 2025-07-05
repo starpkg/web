@@ -15,7 +15,9 @@ import (
 
 // Server methods for Starlark integration
 
-// Get adds a GET route
+// Get adds a GET route to the server.
+// This method registers a handler function for HTTP GET requests to the specified path.
+// Path parameters can be specified using {param} syntax (converted to Gin's :param format).
 func (s *Server) Get(path string, handler starlark.Callable) error {
 	return s.addRoute("GET", path, handler)
 }
@@ -50,7 +52,9 @@ func (s *Server) Head(path string, handler starlark.Callable) error {
 	return s.addRoute("HEAD", path, handler)
 }
 
-// Route adds a route with specific method(s)
+// Route adds a route with specific method(s).
+// This method accepts either a single method string or a list of method strings,
+// allowing the same handler to respond to multiple HTTP methods on the same path.
 func (s *Server) Route(methods interface{}, path string, handler starlark.Callable) error {
 	switch m := methods.(type) {
 	case starlark.String:
@@ -99,7 +103,9 @@ func (s *Server) addRoute(method, path string, handler starlark.Callable) error 
 	return nil
 }
 
-// wrapHandler wraps a Starlark callable as a gin handler
+// wrapHandler wraps a Starlark callable as a gin handler.
+// This function creates a bridge between Gin's HTTP handling and Starlark functions,
+// converting HTTP requests to Starlark objects and handling response conversion.
 func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 	return func(c *gin.Context) {
 		// Create request object
@@ -112,20 +118,31 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 		thread := &starlark.Thread{Name: "web_handler"}
 		result, err := starlark.Call(thread, handler, starlark.Tuple{reqValue}, nil)
 		if err != nil {
-			c.JSON(500, gin.H{"error": err.Error()})
+			sendInternalServerError(c, err.Error())
 			return
 		}
 
-		// Convert result back to Go
+		// Handle ResponseWrapper
+		if responseWrapper, ok := result.(*ResponseWrapper); ok {
+			s.applyResponse(c, responseWrapper.response)
+			return
+		}
+
+		// Fallback: try to convert using starlight
 		responseInterface := convert.FromValue(result)
-		response, ok := responseInterface.(*Response)
-		if !ok {
-			c.JSON(500, gin.H{"error": "Invalid response format"})
+		if response, ok := responseInterface.(*Response); ok {
+			// Convert old Response to HTTPResponse
+			httpResp := &HTTPResponse{
+				StatusCode: response.StatusCode,
+				Headers:    response.Headers,
+				Body:       response.Body,
+				FilePath:   response.FilePath,
+			}
+			s.applyResponse(c, httpResp)
 			return
 		}
 
-		// Apply the response
-		s.applyResponse(c, response)
+		sendInternalServerError(c, "Invalid response format")
 	}
 }
 
@@ -162,8 +179,8 @@ func (s *Server) createRequest(c *gin.Context) *Request {
 	}
 }
 
-// applyResponse applies a Response object to gin context
-func (s *Server) applyResponse(c *gin.Context, response *Response) {
+// applyResponse applies an HTTPResponse object to gin context
+func (s *Server) applyResponse(c *gin.Context, response *HTTPResponse) {
 	// Set headers
 	for key, value := range response.Headers {
 		c.Header(key, value)
@@ -179,7 +196,9 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 	c.Data(response.StatusCode, c.GetHeader("Content-Type"), []byte(response.Body))
 }
 
-// Start starts the server in a goroutine
+// Start starts the server in a goroutine.
+// This method begins listening for HTTP requests on the configured host and port
+// without blocking the current thread, allowing for asynchronous server operation.
 func (s *Server) Start() error {
 	if s.running {
 		return fmt.Errorf("server is already running")
@@ -227,7 +246,9 @@ func (s *Server) Stop() error {
 	return err
 }
 
-// Run starts the server and blocks
+// Run starts the server and blocks.
+// This method starts the HTTP server and blocks the current thread until
+// the server is stopped or encounters an error, suitable for simple applications.
 func (s *Server) Run() error {
 	if s.running {
 		return fmt.Errorf("server is already running")
@@ -251,7 +272,9 @@ func (s *Server) IsRunning() bool {
 	return s.running
 }
 
-// Group creates a route group
+// Group creates a route group.
+// This method creates a new route group with the specified prefix, allowing
+// for organized route registration and middleware application to related endpoints.
 func (s *Server) Group(prefix string) *RouteGroup {
 	ginGroup := s.engine.Group(prefix)
 	return &RouteGroup{
@@ -261,7 +284,9 @@ func (s *Server) Group(prefix string) *RouteGroup {
 	}
 }
 
-// RouteGroup represents a group of routes with a common prefix
+// RouteGroup represents a group of routes with a common prefix.
+// Route groups allow for organized route registration and can have
+// middleware applied specifically to the grouped routes.
 type RouteGroup struct {
 	server   *Server
 	ginGroup *gin.RouterGroup
