@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/http"
 	"regexp"
 
 	"github.com/gin-gonic/gin"
@@ -20,43 +21,43 @@ type RouteGroup struct {
 // Get registers a GET route for this route group.
 // This method adds a GET handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Get(path string, handler starlark.Callable) error {
-	return rg.addRoute("GET", path, handler)
+	return rg.addRoute(http.MethodGet, path, handler)
 }
 
 // Post registers a POST route for this route group.
 // This method adds a POST handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Post(path string, handler starlark.Callable) error {
-	return rg.addRoute("POST", path, handler)
+	return rg.addRoute(http.MethodPost, path, handler)
 }
 
 // Put registers a PUT route for this route group.
 // This method adds a PUT handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Put(path string, handler starlark.Callable) error {
-	return rg.addRoute("PUT", path, handler)
+	return rg.addRoute(http.MethodPut, path, handler)
 }
 
 // Delete registers a DELETE route for this route group.
 // This method adds a DELETE handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Delete(path string, handler starlark.Callable) error {
-	return rg.addRoute("DELETE", path, handler)
+	return rg.addRoute(http.MethodDelete, path, handler)
 }
 
 // Patch registers a PATCH route for this route group.
 // This method adds a PATCH handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Patch(path string, handler starlark.Callable) error {
-	return rg.addRoute("PATCH", path, handler)
+	return rg.addRoute(http.MethodPatch, path, handler)
 }
 
 // Options registers an OPTIONS route for this route group.
 // This method adds an OPTIONS handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Options(path string, handler starlark.Callable) error {
-	return rg.addRoute("OPTIONS", path, handler)
+	return rg.addRoute(http.MethodOptions, path, handler)
 }
 
 // Head registers a HEAD route for this route group.
 // This method adds a HEAD handler to the specified path within the group's prefix.
 func (rg *RouteGroup) Head(path string, handler starlark.Callable) error {
-	return rg.addRoute("HEAD", path, handler)
+	return rg.addRoute(http.MethodHead, path, handler)
 }
 
 // addRoute adds a route to the gin group
@@ -66,19 +67,19 @@ func (rg *RouteGroup) addRoute(method, path string, handler starlark.Callable) e
 	ginHandler := rg.server.wrapHandler(handler)
 
 	switch method {
-	case "GET":
+	case http.MethodGet:
 		rg.ginGroup.GET(ginPath, ginHandler)
-	case "POST":
+	case http.MethodPost:
 		rg.ginGroup.POST(ginPath, ginHandler)
-	case "PUT":
+	case http.MethodPut:
 		rg.ginGroup.PUT(ginPath, ginHandler)
-	case "DELETE":
+	case http.MethodDelete:
 		rg.ginGroup.DELETE(ginPath, ginHandler)
-	case "PATCH":
+	case http.MethodPatch:
 		rg.ginGroup.PATCH(ginPath, ginHandler)
-	case "OPTIONS":
+	case http.MethodOptions:
 		rg.ginGroup.OPTIONS(ginPath, ginHandler)
-	case "HEAD":
+	case http.MethodHead:
 		rg.ginGroup.HEAD(ginPath, ginHandler)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", method)

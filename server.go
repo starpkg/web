@@ -18,37 +18,37 @@ import (
 // This method registers a handler function for HTTP GET requests to the specified path.
 // Path parameters can be specified using {param} syntax (converted to Gin's :param format).
 func (s *Server) Get(path string, handler starlark.Callable) error {
-	return s.addRoute("GET", path, handler)
+	return s.addRoute(http.MethodGet, path, handler)
 }
 
 // Post adds a POST route
 func (s *Server) Post(path string, handler starlark.Callable) error {
-	return s.addRoute("POST", path, handler)
+	return s.addRoute(http.MethodPost, path, handler)
 }
 
 // Put adds a PUT route
 func (s *Server) Put(path string, handler starlark.Callable) error {
-	return s.addRoute("PUT", path, handler)
+	return s.addRoute(http.MethodPut, path, handler)
 }
 
 // Delete adds a DELETE route
 func (s *Server) Delete(path string, handler starlark.Callable) error {
-	return s.addRoute("DELETE", path, handler)
+	return s.addRoute(http.MethodDelete, path, handler)
 }
 
 // Patch adds a PATCH route
 func (s *Server) Patch(path string, handler starlark.Callable) error {
-	return s.addRoute("PATCH", path, handler)
+	return s.addRoute(http.MethodPatch, path, handler)
 }
 
 // Options adds an OPTIONS route
 func (s *Server) Options(path string, handler starlark.Callable) error {
-	return s.addRoute("OPTIONS", path, handler)
+	return s.addRoute(http.MethodOptions, path, handler)
 }
 
 // Head adds a HEAD route
 func (s *Server) Head(path string, handler starlark.Callable) error {
-	return s.addRoute("HEAD", path, handler)
+	return s.addRoute(http.MethodHead, path, handler)
 }
 
 // Route adds a route with specific method(s).
@@ -81,19 +81,19 @@ func (s *Server) addRoute(method, path string, handler starlark.Callable) error 
 	ginHandler := s.wrapHandler(handler)
 
 	switch method {
-	case "GET":
+	case http.MethodGet:
 		s.engine.GET(ginPath, ginHandler)
-	case "POST":
+	case http.MethodPost:
 		s.engine.POST(ginPath, ginHandler)
-	case "PUT":
+	case http.MethodPut:
 		s.engine.PUT(ginPath, ginHandler)
-	case "DELETE":
+	case http.MethodDelete:
 		s.engine.DELETE(ginPath, ginHandler)
-	case "PATCH":
+	case http.MethodPatch:
 		s.engine.PATCH(ginPath, ginHandler)
-	case "OPTIONS":
+	case http.MethodOptions:
 		s.engine.OPTIONS(ginPath, ginHandler)
-	case "HEAD":
+	case http.MethodHead:
 		s.engine.HEAD(ginPath, ginHandler)
 	default:
 		return fmt.Errorf("unsupported HTTP method: %s", method)
