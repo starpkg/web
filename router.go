@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/1set/starlet/dataconv"
 	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
@@ -97,22 +98,33 @@ func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
 		if err != nil {
 			return &Response{
 				StatusCode: 500,
+				Headers:    make(map[string][]string),
 				Body:       fmt.Sprintf("Handler error: %v", err),
 			}
 		}
 
-		// Convert result to Go value using convert.FromValue
-		goValue := convert.FromValue(result)
+		// Try to convert result to Response - first try ResponseFromStarlarkStruct
+		if resp, err := ResponseFromStarlarkStruct(result); err == nil {
+			return resp
+		}
 
-		// Check if the converted value is a Response
+		// Then try direct conversion using dataconv.Unmarshal
+		if goValue, err := dataconv.Unmarshal(result); err == nil {
+			if resp, ok := goValue.(*Response); ok {
+				return resp
+			}
+		}
+
+		// Finally, try convert.FromValue as fallback
+		goValue := convert.FromValue(result)
 		if resp, ok := goValue.(*Response); ok {
 			return resp
-		} else {
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(http.Header),
-				Body:       fmt.Sprintf("Handler did not return a Response object, got %T", goValue),
-			}
+		}
+
+		return &Response{
+			StatusCode: 500,
+			Headers:    make(map[string][]string),
+			Body:       fmt.Sprintf("Handler did not return a Response object, got %T", goValue),
 		}
 	}
 
@@ -247,11 +259,19 @@ func (router *Router) ServeHTTP(req *Request) *Response {
 	// Check dynamic routes
 	tree, exists := router.routes[method]
 	if !exists {
+		// Check if the path exists for any other method
+		if router.pathExistsForOtherMethods(path, method) {
+			return router.createErrorResponse(req, 405, "Method Not Allowed")
+		}
 		return router.createErrorResponse(req, 404, "Not Found")
 	}
 
 	handler, params := router.matchRoute(tree, path)
 	if handler == nil {
+		// Check if the path exists for any other method
+		if router.pathExistsForOtherMethods(path, method) {
+			return router.createErrorResponse(req, 405, "Method Not Allowed")
+		}
 		return router.createErrorResponse(req, 404, "Not Found")
 	}
 
@@ -484,4 +504,16 @@ func (router *Router) createErrorResponse(req *Request, statusCode int, defaultM
 
 	// Fall back to default error response using helper
 	return createErrorResponse(statusCode, defaultMessage)
+}
+
+// pathExistsForOtherMethods checks if the path exists for any other method
+func (router *Router) pathExistsForOtherMethods(path, method string) bool {
+	for otherMethod, tree := range router.routes {
+		if otherMethod != method {
+			if handler, _ := router.matchRoute(tree, path); handler != nil {
+				return true
+			}
+		}
+	}
+	return false
 }
