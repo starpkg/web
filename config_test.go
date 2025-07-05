@@ -150,7 +150,7 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 	// Test with custom timeout values
 	customModule := newModuleWithOptions(
 		genConfigOption(configKeyHost, "Custom host", "localhost"),
-		genConfigOption(configKeyPort, "Custom port", 8080),
+		genConfigOption(configKeyPort, "Custom port", 0),                             // Use port 0 for auto-assignment
 		genConfigOption(configKeyReadTimeout, "Custom read timeout", 120),            // 2 minutes
 		genConfigOption(configKeyWriteTimeout, "Custom write timeout", 180),          // 3 minutes
 		genConfigOption(configKeyMaxBodySize, "Custom max body size", int64(64<<20)), // 64MB
@@ -158,30 +158,53 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 		genConfigOption(configKeyDebugMode, "Custom debug mode", false),
 	)
 
-	// Create a server
-	server := newServer(customModule, "localhost", 8080)
+	// Create a server with port 0 to avoid conflicts
+	server := newServer(customModule, "localhost", 0)
 
-	// Start the server to create httpServer
-	go func() {
-		_ = server.Start()
-	}()
+	// Start the server
+	err := server.Start()
+	if err != nil {
+		t.Fatalf("Failed to start server: %v", err)
+	}
 
-	// Wait a bit for server to start
-	time.Sleep(100 * time.Millisecond)
+	// Wait a bit for the server to be fully ready
+	time.Sleep(200 * time.Millisecond)
+
+	// Verify server is running
+	if !server.IsRunning() {
+		t.Fatal("Server should be running")
+	}
+
+	// Now safely check the timeout configuration values
+	// These are set during server creation, not during Start()
+	if server.readTimeout != 120*time.Second {
+		t.Errorf("Expected read timeout 120s, got %v", server.readTimeout)
+	}
+
+	if server.writeTimeout != 180*time.Second {
+		t.Errorf("Expected write timeout 180s, got %v", server.writeTimeout)
+	}
 
 	// Check that the http.Server has the correct timeout values
-	if server.httpServer == nil {
+	server.mu.RLock()
+	httpServer := server.httpServer
+	server.mu.RUnlock()
+
+	if httpServer == nil {
 		t.Fatal("httpServer should not be nil after starting")
 	}
 
-	if server.httpServer.ReadTimeout != 120*time.Second {
-		t.Errorf("Expected HTTP server read timeout 120s, got %v", server.httpServer.ReadTimeout)
+	if httpServer.ReadTimeout != 120*time.Second {
+		t.Errorf("Expected HTTP server read timeout 120s, got %v", httpServer.ReadTimeout)
 	}
 
-	if server.httpServer.WriteTimeout != 180*time.Second {
-		t.Errorf("Expected HTTP server write timeout 180s, got %v", server.httpServer.WriteTimeout)
+	if httpServer.WriteTimeout != 180*time.Second {
+		t.Errorf("Expected HTTP server write timeout 180s, got %v", httpServer.WriteTimeout)
 	}
 
 	// Stop the server
-	_ = server.Stop()
+	err = server.Stop()
+	if err != nil {
+		t.Errorf("Failed to stop server: %v", err)
+	}
 }

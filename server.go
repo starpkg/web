@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/1set/starlight/convert"
@@ -25,6 +26,7 @@ type Server struct {
 	writeTimeout time.Duration
 	maxBodySize  int64
 	enableCORS   bool
+	mu           sync.RWMutex // Protects running, httpServer fields
 }
 
 // newServer creates a new Server instance with module configuration
@@ -283,6 +285,9 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 // This method begins listening for HTTP requests on the configured host and port
 // without blocking the current thread, allowing for asynchronous server operation.
 func (s *Server) Start() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if s.running {
 		return fmt.Errorf("server is already running")
 	}
@@ -312,6 +317,9 @@ func (s *Server) Start() error {
 
 // Stop stops the server
 func (s *Server) Stop() error {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
 	if !s.running {
 		return fmt.Errorf("server is not running")
 	}
@@ -333,7 +341,9 @@ func (s *Server) Stop() error {
 // This method starts the HTTP server and blocks the current thread until
 // the server is stopped or encounters an error, suitable for simple applications.
 func (s *Server) Run() error {
+	s.mu.Lock()
 	if s.running {
+		s.mu.Unlock()
 		return fmt.Errorf("server is already running")
 	}
 
@@ -347,11 +357,16 @@ func (s *Server) Run() error {
 	}
 
 	s.running = true
-	return s.httpServer.ListenAndServe()
+	httpServer := s.httpServer // Get a local copy before unlocking
+	s.mu.Unlock()
+
+	return httpServer.ListenAndServe()
 }
 
 // IsRunning returns whether the server is running
 func (s *Server) IsRunning() bool {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
 	return s.running
 }
 
