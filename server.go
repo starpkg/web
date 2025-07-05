@@ -52,8 +52,8 @@ func (s *Server) Head(path string, handler starlark.Callable) error {
 // Route adds a route with specific method(s)
 func (s *Server) Route(methods interface{}, path string, handler starlark.Callable) error {
 	switch m := methods.(type) {
-	case string:
-		return s.addRoute(m, path, handler)
+	case starlark.String:
+		return s.addRoute(m.GoString(), path, handler)
 	case *starlark.List:
 		for i := 0; i < m.Len(); i++ {
 			method, ok := m.Index(i).(starlark.String)
