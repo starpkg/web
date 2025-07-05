@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"go.starlark.net/starlark"
 	"go.starlark.net/starlarkstruct"
 )
@@ -431,12 +430,8 @@ func (s *Server) Group(thread *starlark.Thread, b *starlark.Builtin, args starla
 	// Create a new RouteGroup
 	group := NewRouteGroup(s, prefix.GoString())
 
-	// Convert to Starlark value
-	result, err := convert.ToValue(group)
-	if err != nil {
-		return starlark.None, fmt.Errorf("failed to convert route group: %v", err)
-	}
-	return result, nil
+	// Return the RouteGroup's Struct with all methods exposed
+	return group.Struct(), nil
 }
 
 // SPA configures a Single Page Application route
