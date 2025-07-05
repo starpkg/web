@@ -9,8 +9,86 @@ import (
 
 	"github.com/1set/starlight/convert"
 	"github.com/gin-gonic/gin"
+	"github.com/starpkg/base"
 	"go.starlark.net/starlark"
 )
+
+// Server represents an HTTP server instance
+type Server struct {
+	host         string
+	port         int
+	engine       *gin.Engine
+	httpServer   *http.Server
+	running      bool
+	module       *Module // Reference to module for config access
+	readTimeout  time.Duration
+	writeTimeout time.Duration
+	maxBodySize  int64
+	enableCORS   bool
+}
+
+// newServer creates a new Server instance with module configuration
+func newServer(module *Module, host string, port int) *Server {
+	// Get configuration values from module
+	readTimeout := time.Duration(module.ext.GetInt(configKeyReadTimeout)) * time.Second
+	writeTimeout := time.Duration(module.ext.GetInt(configKeyWriteTimeout)) * time.Second
+
+	// For int64 values, we need to use GetConfigValue directly
+	maxBodySize, err := base.GetConfigValue[int64](module.cfgMod, configKeyMaxBodySize)
+	if err != nil {
+		maxBodySize = int64(32 << 20) // Default 32MB if config fails
+	}
+
+	enableCORS := module.ext.GetBool(configKeyEnableCORS)
+	debugMode := module.ext.GetBool(configKeyDebugMode)
+
+	// Set gin mode
+	if !debugMode {
+		gin.SetMode(gin.ReleaseMode)
+	}
+
+	// Create gin engine
+	engine := gin.New()
+	engine.Use(gin.Recovery())
+	if debugMode {
+		engine.Use(gin.Logger())
+	}
+
+	// Configure method not allowed handler
+	engine.HandleMethodNotAllowed = true
+	engine.NoMethod(func(c *gin.Context) {
+		sendMethodNotAllowed(c, "Method not allowed")
+	})
+
+	// Add CORS middleware if enabled
+	if enableCORS {
+		engine.Use(func(c *gin.Context) {
+			c.Header("Access-Control-Allow-Origin", "*")
+			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD")
+			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+
+			if c.Request.Method == "OPTIONS" {
+				c.AbortWithStatus(204)
+				return
+			}
+
+			c.Next()
+		})
+	}
+
+	return &Server{
+		host:         host,
+		port:         port,
+		engine:       engine,
+		httpServer:   nil,
+		running:      false,
+		module:       module,
+		readTimeout:  readTimeout,
+		writeTimeout: writeTimeout,
+		maxBodySize:  maxBodySize,
+		enableCORS:   enableCORS,
+	}
+}
 
 // Server methods for Starlark integration
 
@@ -107,6 +185,12 @@ func (s *Server) addRoute(method, path string, handler starlark.Callable) error 
 // converting HTTP requests to Starlark objects and handling response conversion.
 func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 	return func(c *gin.Context) {
+		// Check request body size if configured
+		if s.maxBodySize > 0 && c.Request.ContentLength > s.maxBodySize {
+			sendBadRequest(c, "Request body too large")
+			return
+		}
+
 		// Create request object
 		req := s.createRequest(c)
 
@@ -208,8 +292,8 @@ func (s *Server) Start() error {
 	s.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      s.engine,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  s.readTimeout,
+		WriteTimeout: s.writeTimeout,
 	}
 
 	go func() {
@@ -258,8 +342,8 @@ func (s *Server) Run() error {
 	s.httpServer = &http.Server{
 		Addr:         addr,
 		Handler:      s.engine,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 30 * time.Second,
+		ReadTimeout:  s.readTimeout,
+		WriteTimeout: s.writeTimeout,
 	}
 
 	s.running = true
@@ -281,4 +365,233 @@ func (s *Server) Group(prefix string) *RouteGroup {
 		ginGroup: ginGroup,
 		prefix:   prefix,
 	}
+}
+
+// Starlark-compatible methods for Server (these delegate to the actual methods)
+
+// StarlarkGet adds a GET route (Starlark-compatible wrapper)
+func (s *Server) StarlarkGet(path string, handler starlark.Callable) error {
+	return s.Get(path, handler)
+}
+
+// StarlarkPost adds a POST route (Starlark-compatible wrapper)
+func (s *Server) StarlarkPost(path string, handler starlark.Callable) error {
+	return s.Post(path, handler)
+}
+
+// StarlarkPut adds a PUT route (Starlark-compatible wrapper)
+func (s *Server) StarlarkPut(path string, handler starlark.Callable) error {
+	return s.Put(path, handler)
+}
+
+// StarlarkDelete adds a DELETE route (Starlark-compatible wrapper)
+func (s *Server) StarlarkDelete(path string, handler starlark.Callable) error {
+	return s.Delete(path, handler)
+}
+
+// StarlarkPatch adds a PATCH route (Starlark-compatible wrapper)
+func (s *Server) StarlarkPatch(path string, handler starlark.Callable) error {
+	return s.Patch(path, handler)
+}
+
+// StarlarkOptions adds an OPTIONS route (Starlark-compatible wrapper)
+func (s *Server) StarlarkOptions(path string, handler starlark.Callable) error {
+	return s.Options(path, handler)
+}
+
+// StarlarkHead adds a HEAD route (Starlark-compatible wrapper)
+func (s *Server) StarlarkHead(path string, handler starlark.Callable) error {
+	return s.Head(path, handler)
+}
+
+// StarlarkRoute adds a route with specific method(s) (Starlark-compatible wrapper)
+func (s *Server) StarlarkRoute(methods interface{}, path string, handler starlark.Callable) error {
+	return s.Route(methods, path, handler)
+}
+
+// StarlarkStart starts the server (Starlark-compatible wrapper)
+func (s *Server) StarlarkStart() error {
+	return s.Start()
+}
+
+// StarlarkStop stops the server (Starlark-compatible wrapper)
+func (s *Server) StarlarkStop() error {
+	return s.Stop()
+}
+
+// StarlarkRun starts the server and blocks (Starlark-compatible wrapper)
+func (s *Server) StarlarkRun() error {
+	return s.Run()
+}
+
+// StarlarkIsRunning returns whether the server is running (Starlark-compatible wrapper)
+func (s *Server) StarlarkIsRunning() bool {
+	return s.IsRunning()
+}
+
+// StarlarkGroup creates a route group (Starlark-compatible wrapper)
+func (s *Server) StarlarkGroup(prefix string) *RouteGroup {
+	return s.Group(prefix)
+}
+
+// ServerWrapper wraps the Server struct to provide Starlark-compatible method names
+type ServerWrapper struct {
+	server *Server
+}
+
+func (sw *ServerWrapper) String() string {
+	return fmt.Sprintf("<web.Server host=%s port=%d>", sw.server.host, sw.server.port)
+}
+
+func (sw *ServerWrapper) Type() string {
+	return "web.Server"
+}
+
+func (sw *ServerWrapper) Freeze() {
+	// Server is immutable after creation
+}
+
+func (sw *ServerWrapper) Truth() starlark.Bool {
+	return starlark.True
+}
+
+func (sw *ServerWrapper) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", sw.Type())
+}
+
+func (sw *ServerWrapper) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "get":
+		return starlark.NewBuiltin("get", sw.get), nil
+	case "post":
+		return starlark.NewBuiltin("post", sw.post), nil
+	case "put":
+		return starlark.NewBuiltin("put", sw.put), nil
+	case "delete":
+		return starlark.NewBuiltin("delete", sw.delete), nil
+	case "patch":
+		return starlark.NewBuiltin("patch", sw.patch), nil
+	case "options":
+		return starlark.NewBuiltin("options", sw.options), nil
+	case "head":
+		return starlark.NewBuiltin("head", sw.head), nil
+	case "route":
+		return starlark.NewBuiltin("route", sw.route), nil
+	case "start":
+		return starlark.NewBuiltin("start", sw.start), nil
+	case "stop":
+		return starlark.NewBuiltin("stop", sw.stop), nil
+	case "run":
+		return starlark.NewBuiltin("run", sw.run), nil
+	case "is_running":
+		return starlark.NewBuiltin("is_running", sw.isRunning), nil
+	case "group":
+		return starlark.NewBuiltin("group", sw.group), nil
+	default:
+		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", sw.Type(), name))
+	}
+}
+
+func (sw *ServerWrapper) AttrNames() []string {
+	return []string{"get", "post", "put", "delete", "patch", "options", "head", "route", "start", "stop", "run", "is_running", "group"}
+}
+
+// Starlark builtin methods
+
+func (sw *ServerWrapper) get(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Get(path, handler)
+}
+
+func (sw *ServerWrapper) post(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Post(path, handler)
+}
+
+func (sw *ServerWrapper) put(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Put(path, handler)
+}
+
+func (sw *ServerWrapper) delete(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Delete(path, handler)
+}
+
+func (sw *ServerWrapper) patch(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Patch(path, handler)
+}
+
+func (sw *ServerWrapper) options(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Options(path, handler)
+}
+
+func (sw *ServerWrapper) head(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Head(path, handler)
+}
+
+func (sw *ServerWrapper) route(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var methods starlark.Value
+	var path string
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "methods", &methods, "path", &path, "handler", &handler); err != nil {
+		return nil, err
+	}
+	return starlark.None, sw.server.Route(methods, path, handler)
+}
+
+func (sw *ServerWrapper) start(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return starlark.None, sw.server.Start()
+}
+
+func (sw *ServerWrapper) stop(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return starlark.None, sw.server.Stop()
+}
+
+func (sw *ServerWrapper) run(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return starlark.None, sw.server.Run()
+}
+
+func (sw *ServerWrapper) isRunning(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	return starlark.Bool(sw.server.IsRunning()), nil
+}
+
+func (sw *ServerWrapper) group(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var prefix string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "prefix", &prefix); err != nil {
+		return nil, err
+	}
+	group := sw.server.Group(prefix)
+	return &RouteGroupWrapper{group: group}, nil
 }
