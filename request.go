@@ -10,6 +10,15 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// readerCloser wraps a strings.Reader to implement io.ReadCloser
+type readerCloser struct {
+	*strings.Reader
+}
+
+func (rc *readerCloser) Close() error {
+	return nil
+}
+
 // Request represents an HTTP request.
 // This structure holds the complete request data including method, URL, headers,
 // query parameters, and provides access to the underlying gin context for
@@ -26,6 +35,7 @@ type Request struct {
 	Query    map[string]string      `json:"query"`
 	Context  map[string]interface{} `json:"context"`
 	ginCtx   *gin.Context           // Internal gin context
+	bodyData []byte                 // Cached body data for multiple reads
 }
 
 // createRequestFromGin creates a Request from a gin.Context.
@@ -51,6 +61,9 @@ func createRequestFromGin(c *gin.Context) *Request {
 	// Create context map for middleware data
 	context := make(map[string]interface{})
 
+	// Cache body data for multiple reads
+	bodyData, _ := c.GetRawData()
+
 	return &Request{
 		Method:   c.Request.Method,
 		URL:      c.Request.URL.String(),
@@ -63,6 +76,7 @@ func createRequestFromGin(c *gin.Context) *Request {
 		Query:    query,
 		Context:  context,
 		ginCtx:   c,
+		bodyData: bodyData,
 	}
 }
 
@@ -180,16 +194,7 @@ func (rw *RequestWrapper) bodyMethod(thread *starlark.Thread, b *starlark.Builti
 		return nil, err
 	}
 
-	if rw.request.ginCtx == nil {
-		return starlark.String(""), nil
-	}
-
-	body, err := rw.request.ginCtx.GetRawData()
-	if err != nil {
-		return starlark.String(""), nil
-	}
-
-	return starlark.String(string(body)), nil
+	return starlark.String(string(rw.request.bodyData)), nil
 }
 
 // jsonMethod parses the request body as JSON and returns the parsed data.
@@ -199,21 +204,12 @@ func (rw *RequestWrapper) jsonMethod(thread *starlark.Thread, b *starlark.Builti
 		return nil, err
 	}
 
-	if rw.request.ginCtx == nil {
-		return starlark.None, nil
-	}
-
-	body, err := rw.request.ginCtx.GetRawData()
-	if err != nil {
-		return starlark.None, nil
-	}
-
-	if len(body) == 0 {
+	if len(rw.request.bodyData) == 0 {
 		return starlark.None, nil
 	}
 
 	// Try to parse as JSON using the existing dataconv package
-	jsonValue, err := dataconv.DecodeStarlarkJSON(body)
+	jsonValue, err := dataconv.DecodeStarlarkJSON(rw.request.bodyData)
 	if err != nil {
 		return starlark.None, nil
 	}
@@ -230,6 +226,13 @@ func (rw *RequestWrapper) formMethod(thread *starlark.Thread, b *starlark.Builti
 
 	if rw.request.ginCtx == nil {
 		return starlark.NewDict(0), nil
+	}
+
+	// If we have cached body data, we need to recreate the body for form parsing
+	if len(rw.request.bodyData) > 0 {
+		// Create a new reader from the cached body data
+		bodyReader := strings.NewReader(string(rw.request.bodyData))
+		rw.request.ginCtx.Request.Body = &readerCloser{bodyReader}
 	}
 
 	// Parse form data

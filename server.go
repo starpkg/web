@@ -233,35 +233,7 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 
 // createRequest creates a Request object from gin context
 func (s *Server) createRequest(c *gin.Context) *Request {
-	// Parse query parameters
-	queryParams := make(map[string]string)
-	for key, values := range c.Request.URL.Query() {
-		if len(values) > 0 {
-			queryParams[key] = values[0]
-		}
-	}
-
-	// Parse headers
-	headers := make(map[string]string)
-	for key, values := range c.Request.Header {
-		if len(values) > 0 {
-			headers[key] = values[0]
-		}
-	}
-
-	return &Request{
-		Method:   c.Request.Method,
-		URL:      c.Request.URL.String(),
-		Path:     c.Request.URL.Path,
-		Host:     c.Request.Host,
-		Remote:   c.Request.RemoteAddr,
-		ClientIP: c.ClientIP(),
-		Proto:    c.Request.Proto,
-		Headers:  headers,
-		Query:    queryParams,
-		Context:  make(map[string]interface{}),
-		ginCtx:   c,
-	}
+	return createRequestFromGin(c)
 }
 
 // applyResponse applies a Response object to gin context

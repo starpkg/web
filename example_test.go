@@ -16,7 +16,7 @@ func TestStarlarkScripts(t *testing.T) {
 	moduleFactory := func() starlet.ModuleLoader {
 		return NewModule().LoadModule()
 	}
-	extraModules := []string{"go_idiomatic", "http"}
+	extraModules := []string{"go_idiomatic", "http", "json", "file", "path"}
 
 	// Use the helper function from the base package
 	base.RunStarlarkTests(t, ModuleName, moduleFactory, extraModules, "")
