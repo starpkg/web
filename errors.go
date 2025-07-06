@@ -51,7 +51,6 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 		}
 	}
 
-	// Call custom error handler
 	thread := &starlark.Thread{Name: "error_handler"}
 	reqWrapper := NewRequestWrapper(req)
 	args := starlark.Tuple{reqWrapper}

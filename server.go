@@ -63,13 +63,46 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Configure method not allowed handler
 	engine.HandleMethodNotAllowed = true
+
+	// Create server instance first
+	server := &Server{
+		host:               host,
+		port:               port,
+		engine:             engine,
+		httpServer:         nil,
+		running:            false,
+		module:             module,
+		readTimeout:        readTimeout,
+		writeTimeout:       writeTimeout,
+		maxBodySize:        maxBodySize,
+		enableCORS:         enableCORS,
+		serverHeader:       serverHeader,
+		middleware:         make([]*MiddlewareWrapper, 0),
+		errorHandlers:      NewErrorHandlerRegistry(),
+		ginMiddlewareAdded: false,
+	}
+
+	// Now configure NoRoute and NoMethod handlers with access to server
 	engine.NoMethod(func(c *gin.Context) {
-		sendMethodNotAllowed(c, "Method not allowed")
+		// Use custom 405 error handler if registered
+		if customHandler := server.errorHandlers.GetHandler(405); customHandler != nil {
+			req := createRequestFromGin(c)
+			response := server.errorHandlers.HandleError(405, req)
+			server.applyResponse(c, response)
+		} else {
+			sendMethodNotAllowed(c, "Method not allowed")
+		}
 	})
 
-	// Configure no route handler to return 404 instead of 405
 	engine.NoRoute(func(c *gin.Context) {
-		sendNotFound(c, "Not found")
+		// Use custom 404 error handler if registered
+		if customHandler := server.errorHandlers.GetHandler(404); customHandler != nil {
+			req := createRequestFromGin(c)
+			response := server.errorHandlers.HandleError(404, req)
+			server.applyResponse(c, response)
+		} else {
+			sendNotFound(c, "Not found")
+		}
 	})
 
 	// Add CORS middleware if enabled
@@ -86,23 +119,6 @@ func newServer(module *Module, host string, port int) *Server {
 
 			c.Next()
 		})
-	}
-
-	server := &Server{
-		host:               host,
-		port:               port,
-		engine:             engine,
-		httpServer:         nil,
-		running:            false,
-		module:             module,
-		readTimeout:        readTimeout,
-		writeTimeout:       writeTimeout,
-		maxBodySize:        maxBodySize,
-		enableCORS:         enableCORS,
-		serverHeader:       serverHeader,
-		middleware:         make([]*MiddlewareWrapper, 0),
-		errorHandlers:      NewErrorHandlerRegistry(),
-		ginMiddlewareAdded: false,
 	}
 
 	return server
@@ -355,6 +371,32 @@ func (s *Server) createRequest(c *gin.Context) *Request {
 
 // applyResponse applies a Response object to gin context
 func (s *Server) applyResponse(c *gin.Context, response *Response) {
+	// Check if this is an error response and if we have a custom error handler
+	if response.StatusCode >= 400 {
+		if customHandler := s.errorHandlers.GetHandler(response.StatusCode); customHandler != nil {
+			// Create request from gin context
+			req := createRequestFromGin(c)
+			// Use custom error handler
+			customResponse := s.errorHandlers.HandleError(response.StatusCode, req)
+
+			// Apply the custom response
+			for key, value := range customResponse.Headers {
+				c.Header(key, value)
+			}
+
+			// Handle file response
+			if customResponse.FilePath != "" {
+				c.File(customResponse.FilePath)
+				return
+			}
+
+			// Handle regular response
+			c.Data(customResponse.StatusCode, c.GetHeader("Content-Type"), []byte(customResponse.Body))
+			return
+		}
+	}
+
+	// Apply original response if no custom error handler
 	// Set headers
 	for key, value := range response.Headers {
 		c.Header(key, value)

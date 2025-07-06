@@ -75,6 +75,10 @@ func (rw *ResponseWrapper) Attr(name string) (starlark.Value, error) {
 		return starlark.NewBuiltin("set_cookie", rw.setCookieMethod), nil
 	case "delete_cookie":
 		return starlark.NewBuiltin("delete_cookie", rw.deleteCookieMethod), nil
+	case "set_header":
+		return starlark.NewBuiltin("set_header", rw.setHeaderMethod), nil
+	case "get_header":
+		return starlark.NewBuiltin("get_header", rw.getHeaderMethod), nil
 	default:
 		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
 	}
@@ -82,7 +86,49 @@ func (rw *ResponseWrapper) Attr(name string) (starlark.Value, error) {
 
 // AttrNames returns the list of available attributes
 func (rw *ResponseWrapper) AttrNames() []string {
-	return []string{"status_code", "headers", "body", "file_path", "set_cookie", "delete_cookie"}
+	return []string{"status_code", "headers", "body", "file_path", "set_cookie", "delete_cookie", "set_header", "get_header"}
+}
+
+// SetAttr sets the value of the specified attribute
+func (rw *ResponseWrapper) SetAttr(name string, value starlark.Value) error {
+	switch name {
+	case "status_code":
+		if statusInt, ok := value.(starlark.Int); ok {
+			if status, ok := statusInt.Int64(); ok {
+				rw.response.StatusCode = int(status)
+				return nil
+			}
+		}
+		return fmt.Errorf("status_code must be an integer")
+	case "headers":
+		if headersDict, ok := value.(*starlark.Dict); ok {
+			// Clear existing headers and set new ones
+			rw.response.Headers = make(map[string]string)
+			for _, item := range headersDict.Items() {
+				key, keyOk := item[0].(starlark.String)
+				val, valOk := item[1].(starlark.String)
+				if keyOk && valOk {
+					rw.response.Headers[string(key)] = string(val)
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("headers must be a dict")
+	case "body":
+		if bodyStr, ok := value.(starlark.String); ok {
+			rw.response.Body = string(bodyStr)
+			return nil
+		}
+		return fmt.Errorf("body must be a string")
+	case "file_path":
+		if pathStr, ok := value.(starlark.String); ok {
+			rw.response.FilePath = string(pathStr)
+			return nil
+		}
+		return fmt.Errorf("file_path must be a string")
+	default:
+		return starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
+	}
 }
 
 // setCookieMethod handles the set_cookie() method call
@@ -171,4 +217,44 @@ func (rw *ResponseWrapper) deleteCookieMethod(thread *starlark.Thread, b *starla
 	}
 
 	return starlark.None, nil
+}
+
+// setHeaderMethod handles the set_header() method call
+func (rw *ResponseWrapper) setHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name, value string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"name", &name,
+		"value", &value,
+	); err != nil {
+		return nil, err
+	}
+
+	if rw.response.Headers == nil {
+		rw.response.Headers = make(map[string]string)
+	}
+	rw.response.Headers[name] = value
+
+	return starlark.None, nil
+}
+
+// getHeaderMethod handles the get_header() method call
+func (rw *ResponseWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	var defaultValue starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"name", &name,
+		"default?", &defaultValue,
+	); err != nil {
+		return nil, err
+	}
+
+	if rw.response.Headers == nil {
+		return defaultValue, nil
+	}
+
+	if value, exists := rw.response.Headers[name]; exists {
+		return starlark.String(value), nil
+	}
+
+	return defaultValue, nil
 }
