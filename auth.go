@@ -29,13 +29,7 @@ func (a *Authenticator) Middleware() MiddlewareFunc {
 	return func(req *Request, next NextFunc) *Response {
 		result := a.authenticate(req)
 		if !result.Success {
-			return &Response{
-				StatusCode: result.ErrorCode,
-				Headers: map[string]string{
-					"Content-Type": "application/json",
-				},
-				Body: fmt.Sprintf(`{"error":%q}`, result.Message),
-			}
+			return createJSONErrorResponse(result.ErrorCode, result.Message)
 		}
 
 		// Store user info in request context
@@ -71,9 +65,14 @@ func (a *Authenticator) authenticateAPIKey(req *Request) *AuthResult {
 	header := a.config["header"].(string)
 	queryParam := a.config["query_param"].(string)
 
-	// Try header first
+	// Try header first (use canonical header key)
 	var apiKey string
-	if headerValue, exists := req.Headers[header]; exists {
+	canonicalHeaderKey := canonicalHeader(header)
+
+	// Check both the canonical and original header key to be safe
+	if headerValue, exists := req.Headers[canonicalHeaderKey]; exists {
+		apiKey = headerValue
+	} else if headerValue, exists := req.Headers[header]; exists {
 		apiKey = headerValue
 	} else if queryParam != "" {
 		// Try query parameter
@@ -112,21 +111,33 @@ func (a *Authenticator) authenticateBearerToken(req *Request) *AuthResult {
 	header := a.config["header"].(string)
 	validateFunc := a.validateFunc
 
-	authHeader, exists := req.Headers[header]
-	if !exists {
-		return &AuthResult{
-			Success:   false,
-			ErrorCode: 401,
-			Message:   "Authorization header required",
+	canonicalHeaderKey := canonicalHeader(header)
+	var authHeader string
+	var exists bool
+
+	// Check both canonical and original header key
+	if authHeader, exists = req.Headers[canonicalHeaderKey]; !exists {
+		if authHeader, exists = req.Headers[header]; !exists {
+			return &AuthResult{
+				Success:   false,
+				ErrorCode: 401,
+				Message:   "Authorization header required",
+			}
 		}
 	}
 
 	var token string
 	if strings.HasPrefix(authHeader, "Bearer ") {
 		token = authHeader[7:] // Remove "Bearer " prefix
-	} else {
-		// If using custom header, use the value directly
+	} else if canonicalHeaderKey != canonicalHeader(HeaderAuthorization) {
+		// If using custom header (not Authorization), use the value directly
 		token = authHeader
+	} else {
+		return &AuthResult{
+			Success:   false,
+			ErrorCode: 401,
+			Message:   "Bearer token format required",
+		}
 	}
 
 	if token == "" {
@@ -175,12 +186,17 @@ func (a *Authenticator) authenticateBasic(req *Request) *AuthResult {
 	users := a.config["users"].(map[string]string)
 	realm := a.config["realm"].(string)
 
-	authHeader, exists := req.Headers["Authorization"]
-	if !exists {
-		return &AuthResult{
-			Success:   false,
-			ErrorCode: 401,
-			Message:   fmt.Sprintf("Basic realm=\"%s\"", realm),
+	canonicalAuthHeader := canonicalHeader(HeaderAuthorization)
+	var authHeader string
+	var exists bool
+
+	if authHeader, exists = req.Headers[canonicalAuthHeader]; !exists {
+		if authHeader, exists = req.Headers[HeaderAuthorization]; !exists {
+			return &AuthResult{
+				Success:   false,
+				ErrorCode: 401,
+				Message:   fmt.Sprintf("Basic realm=\"%s\"", realm),
+			}
 		}
 	}
 

@@ -75,7 +75,7 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 		methods = []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}
 	}
 	if len(headers) == 0 {
-		headers = []string{"Content-Type", "Authorization"}
+		headers = []string{HeaderContentType, HeaderAuthorization}
 	}
 
 	return func(req *Request, next NextFunc) *Response {
@@ -84,10 +84,10 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 			return &Response{
 				StatusCode: 204,
 				Headers: map[string]string{
-					"Access-Control-Allow-Origin":      strings.Join(origins, ", "),
-					"Access-Control-Allow-Methods":     strings.Join(methods, ", "),
-					"Access-Control-Allow-Headers":     strings.Join(headers, ", "),
-					"Access-Control-Allow-Credentials": fmt.Sprintf("%t", credentials),
+					canonicalHeader(HeaderAccessControlAllowOrigin):      strings.Join(origins, ", "),
+					canonicalHeader(HeaderAccessControlAllowMethods):     strings.Join(methods, ", "),
+					canonicalHeader(HeaderAccessControlAllowHeaders):     strings.Join(headers, ", "),
+					canonicalHeader(HeaderAccessControlAllowCredentials): fmt.Sprintf("%t", credentials),
 				},
 				Body: "",
 			}
@@ -100,9 +100,9 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers["Access-Control-Allow-Origin"] = strings.Join(origins, ", ")
+		response.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)] = strings.Join(origins, ", ")
 		if credentials {
-			response.Headers["Access-Control-Allow-Credentials"] = "true"
+			response.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
 		}
 
 		return response
@@ -145,7 +145,7 @@ func securityHeadersMiddleware(config map[string]string) MiddlewareFunc {
 
 		// Add security headers
 		for header, value := range config {
-			response.Headers[header] = value
+			response.Headers[canonicalHeader(header)] = value
 		}
 
 		return response
@@ -155,7 +155,7 @@ func securityHeadersMiddleware(config map[string]string) MiddlewareFunc {
 // timingMiddleware adds response time header
 func timingMiddleware(header string) MiddlewareFunc {
 	if header == "" {
-		header = "X-Response-Time"
+		header = HeaderXResponseTime
 	}
 
 	return func(req *Request, next NextFunc) *Response {
@@ -168,7 +168,7 @@ func timingMiddleware(header string) MiddlewareFunc {
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers[header] = fmt.Sprintf("%.3fms", float64(duration)/float64(time.Millisecond))
+		response.Headers[canonicalHeader(header)] = fmt.Sprintf("%.3fms", float64(duration)/float64(time.Millisecond))
 
 		return response
 	}
@@ -178,7 +178,7 @@ func timingMiddleware(header string) MiddlewareFunc {
 func jsonMiddleware() MiddlewareFunc {
 	return func(req *Request, next NextFunc) *Response {
 		// Parse JSON if content type is application/json
-		if req.Headers["Content-Type"] == "application/json" && len(req.bodyData) > 0 {
+		if req.Headers[canonicalHeader(HeaderContentType)] == MIMEApplicationJSON && len(req.bodyData) > 0 {
 			// Try to parse JSON and store in context
 			if jsonValue, err := dataconv.DecodeStarlarkJSON(req.bodyData); err == nil {
 				if jsonData, err := dataconv.Unmarshal(jsonValue); err == nil {
@@ -198,8 +198,8 @@ func jsonMiddleware() MiddlewareFunc {
 		body := strings.TrimSpace(response.Body)
 		if (strings.HasPrefix(body, "{") && strings.HasSuffix(body, "}")) ||
 			(strings.HasPrefix(body, "[") && strings.HasSuffix(body, "]")) {
-			if response.Headers["Content-Type"] == "" {
-				response.Headers["Content-Type"] = "application/json"
+			if response.Headers[canonicalHeader(HeaderContentType)] == "" {
+				response.Headers[canonicalHeader(HeaderContentType)] = MIMEApplicationJSON
 			}
 		}
 
@@ -233,13 +233,7 @@ func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
 		result, err := starlark.Call(thread, middlewareFunc, args, nil)
 		if err != nil {
 			// Return error response
-			return &Response{
-				StatusCode: 500,
-				Headers: map[string]string{
-					"Content-Type": "application/json",
-				},
-				Body: fmt.Sprintf(`{"error":"Middleware error: %s"}`, err.Error()),
-			}
+			return createJSONErrorResponse(500, fmt.Sprintf("Middleware error: %s", err.Error()))
 		}
 
 		// Convert result back to Response
@@ -248,12 +242,6 @@ func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
 		}
 
 		// If not a response wrapper, return error
-		return &Response{
-			StatusCode: 500,
-			Headers: map[string]string{
-				"Content-Type": "application/json",
-			},
-			Body: `{"error":"Middleware must return a response"}`,
-		}
+		return createJSONErrorResponse(500, "Middleware must return a response")
 	}
 }

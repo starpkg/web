@@ -5,7 +5,6 @@ package web
 
 import (
 	"fmt"
-	"net/http"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -251,22 +250,13 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	}
 
 	statusCode, _ := status.Int64()
-	headerMap := make(map[string]string)
-
-	for _, item := range headers.Items() {
-		key, ok := item[0].(starlark.String)
-		if !ok {
-			continue
-		}
-		value, ok := item[1].(starlark.String)
-		if !ok {
-			continue
-		}
-		headerMap[string(key)] = string(value)
+	headerMap, err := starlarkDictToStringMap(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
 	}
 
 	// Set content type
-	headerMap["Content-Type"] = "application/json"
+	headerMap[canonicalHeader(HeaderContentType)] = MIMEApplicationJSON
 
 	response := &Response{
 		StatusCode: int(statusCode),
@@ -293,22 +283,13 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	}
 
 	statusCode, _ := status.Int64()
-	headerMap := make(map[string]string)
-
-	for _, item := range headers.Items() {
-		key, ok := item[0].(starlark.String)
-		if !ok {
-			continue
-		}
-		value, ok := item[1].(starlark.String)
-		if !ok {
-			continue
-		}
-		headerMap[string(key)] = string(value)
+	headerMap, err := starlarkDictToStringMap(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
 	}
 
 	// Set content type
-	headerMap["Content-Type"] = "text/html"
+	headerMap[canonicalHeader(HeaderContentType)] = MIMETextHTML
 
 	response := &Response{
 		StatusCode: int(statusCode),
@@ -338,7 +319,7 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 	response := &Response{
 		StatusCode: int(statusCode),
 		Headers: map[string]string{
-			"Location": string(location),
+			canonicalHeader(HeaderLocation): string(location),
 		},
 		Body: "",
 	}
@@ -393,7 +374,7 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 	}
 
 	if contentType != "" {
-		response.Headers["Content-Type"] = string(contentType)
+		response.Headers[canonicalHeader(HeaderContentType)] = string(contentType)
 	}
 
 	return NewResponseWrapper(response), nil
@@ -404,7 +385,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	var (
 		data        = starlark.String("")
 		filename    = starlark.String("")
-		contentType = starlark.String("application/octet-stream")
+		contentType = starlark.String(MIMEApplicationOctetStream)
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
@@ -418,8 +399,8 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	response := &Response{
 		StatusCode: 200,
 		Headers: map[string]string{
-			"Content-Type":        string(contentType),
-			"Content-Disposition": fmt.Sprintf("attachment; filename=%s", string(filename)),
+			canonicalHeader(HeaderContentType):        string(contentType),
+			canonicalHeader(HeaderContentDisposition): fmt.Sprintf("attachment; filename=%s", string(filename)),
 		},
 		Body: string(data),
 	}
@@ -433,7 +414,7 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		keys       = starlark.NewList(nil)
-		header     = starlark.String("X-API-Key")
+		header     = starlark.String(HeaderAPIKey)
 		queryParam = starlark.String("api_key")
 	)
 
@@ -446,20 +427,16 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 	}
 
 	// Convert Starlark list to Go slice
-	keySlice := make([]string, keys.Len())
-	for i := 0; i < keys.Len(); i++ {
-		if key, ok := keys.Index(i).(starlark.String); ok {
-			keySlice[i] = string(key)
-		} else {
-			return none, fmt.Errorf("all keys must be strings")
-		}
+	keySlice, err := starlarkListToStringSlice(keys)
+	if err != nil {
+		return none, fmt.Errorf("invalid keys: %v", err)
 	}
 
 	auth := &Authenticator{
 		authType: "api_key",
 		config: map[string]interface{}{
 			"keys":        keySlice,
-			"header":      http.CanonicalHeaderKey(string(header)),
+			"header":      canonicalHeader(string(header)),
 			"query_param": string(queryParam),
 		},
 	}
@@ -471,7 +448,7 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		validateFunc starlark.Callable
-		header       = starlark.String("Authorization")
+		header       = starlark.String(HeaderAuthorization)
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
@@ -485,7 +462,7 @@ func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 		validateFunc: validateFunc,
 		authType:     "bearer",
 		config: map[string]interface{}{
-			"header": http.CanonicalHeaderKey(string(header)),
+			"header": canonicalHeader(string(header)),
 		},
 	}
 
@@ -507,14 +484,9 @@ func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args st
 	}
 
 	// Convert Starlark dict to Go map
-	userMap := make(map[string]string)
-	for _, item := range users.Items() {
-		key, keyOk := item[0].(starlark.String)
-		value, valueOk := item[1].(starlark.String)
-		if !keyOk || !valueOk {
-			return none, fmt.Errorf("users must be a dict of strings")
-		}
-		userMap[string(key)] = string(value)
+	userMap, err := starlarkDictToStringMap(users)
+	if err != nil {
+		return none, fmt.Errorf("invalid users: %v", err)
 	}
 
 	auth := &Authenticator{
@@ -549,25 +521,19 @@ func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, ar
 	}
 
 	// Convert lists to slices
-	originsSlice := make([]string, origins.Len())
-	for i := 0; i < origins.Len(); i++ {
-		if origin, ok := origins.Index(i).(starlark.String); ok {
-			originsSlice[i] = string(origin)
-		}
+	originsSlice, err := starlarkListToStringSlice(origins)
+	if err != nil {
+		return none, fmt.Errorf("invalid origins: %v", err)
 	}
 
-	methodsSlice := make([]string, methods.Len())
-	for i := 0; i < methods.Len(); i++ {
-		if method, ok := methods.Index(i).(starlark.String); ok {
-			methodsSlice[i] = string(method)
-		}
+	methodsSlice, err := starlarkListToStringSlice(methods)
+	if err != nil {
+		return none, fmt.Errorf("invalid methods: %v", err)
 	}
 
-	headersSlice := make([]string, headers.Len())
-	for i := 0; i < headers.Len(); i++ {
-		if header, ok := headers.Index(i).(starlark.String); ok {
-			headersSlice[i] = string(header)
-		}
+	headersSlice, err := starlarkListToStringSlice(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
 	}
 
 	middleware := corsMiddleware(originsSlice, methodsSlice, headersSlice, bool(credentials))

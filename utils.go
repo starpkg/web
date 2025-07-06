@@ -5,6 +5,41 @@ import (
 	"net/http"
 
 	"github.com/gin-gonic/gin"
+	"go.starlark.net/starlark"
+)
+
+// MIME type constants to avoid hardcoding throughout the module
+const (
+	MIMEApplicationJSON        = "application/json"
+	MIMEApplicationOctetStream = "application/octet-stream"
+	MIMETextPlain              = "text/plain"
+	MIMETextHTML               = "text/html"
+	MIMETextCSV                = "text/csv"
+	MIMEApplicationForm        = "application/x-www-form-urlencoded"
+	MIMEMultipartForm          = "multipart/form-data"
+)
+
+// Common header constants
+const (
+	HeaderContentType                   = "Content-Type"
+	HeaderContentLength                 = "Content-Length"
+	HeaderContentDisposition            = "Content-Disposition"
+	HeaderAuthorization                 = "Authorization"
+	HeaderAPIKey                        = "X-API-Key"
+	HeaderServer                        = "Server"
+	HeaderLocation                      = "Location"
+	HeaderCacheControl                  = "Cache-Control"
+	HeaderAccessControlAllowOrigin      = "Access-Control-Allow-Origin"
+	HeaderAccessControlAllowMethods     = "Access-Control-Allow-Methods"
+	HeaderAccessControlAllowHeaders     = "Access-Control-Allow-Headers"
+	HeaderAccessControlAllowCredentials = "Access-Control-Allow-Credentials"
+	HeaderXFrameOptions                 = "X-Frame-Options"
+	HeaderXContentTypeOptions           = "X-Content-Type-Options"
+	HeaderXXSSProtection                = "X-XSS-Protection"
+	HeaderStrictTransportSecurity       = "Strict-Transport-Security"
+	HeaderContentSecurityPolicy         = "Content-Security-Policy"
+	HeaderReferrerPolicy                = "Referrer-Policy"
+	HeaderXResponseTime                 = "X-Response-Time"
 )
 
 // ErrorResponse represents a standardized error response.
@@ -14,6 +49,58 @@ type ErrorResponse struct {
 	Error   string `json:"error"`
 	Message string `json:"message,omitempty"`
 	Code    int    `json:"code"`
+}
+
+// canonicalHeader standardizes header key using http.CanonicalHeaderKey
+func canonicalHeader(key string) string {
+	return http.CanonicalHeaderKey(key)
+}
+
+// starlarkListToStringSlice converts a Starlark list to Go string slice
+func starlarkListToStringSlice(list *starlark.List) ([]string, error) {
+	if list == nil {
+		return []string{}, nil
+	}
+
+	result := make([]string, list.Len())
+	for i := 0; i < list.Len(); i++ {
+		item := list.Index(i)
+		if str, ok := item.(starlark.String); ok {
+			result[i] = string(str)
+		} else {
+			return nil, fmt.Errorf("list item at index %d is not a string", i)
+		}
+	}
+	return result, nil
+}
+
+// starlarkDictToStringMap converts a Starlark dict to Go string map
+func starlarkDictToStringMap(dict *starlark.Dict) (map[string]string, error) {
+	if dict == nil {
+		return make(map[string]string), nil
+	}
+
+	result := make(map[string]string)
+	for _, item := range dict.Items() {
+		key, keyOk := item[0].(starlark.String)
+		value, valueOk := item[1].(starlark.String)
+		if !keyOk || !valueOk {
+			return nil, fmt.Errorf("dict contains non-string key or value")
+		}
+		result[string(key)] = string(value)
+	}
+	return result, nil
+}
+
+// createJSONErrorResponse creates a standardized JSON error response
+func createJSONErrorResponse(statusCode int, message string) *Response {
+	return &Response{
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
+		},
+		Body: fmt.Sprintf(`{"error":%q,"code":%d}`, message, statusCode),
+	}
 }
 
 // sendErrorResponse sends a consistent error response.
