@@ -16,17 +16,21 @@ import (
 
 // Server represents an HTTP server instance
 type Server struct {
-	host         string
-	port         int
-	engine       *gin.Engine
-	httpServer   *http.Server
-	running      bool
-	module       *Module // Reference to module for config access
-	readTimeout  time.Duration
-	writeTimeout time.Duration
-	maxBodySize  int64
-	enableCORS   bool
-	mu           sync.RWMutex // Protects running, httpServer fields
+	host               string
+	port               int
+	engine             *gin.Engine
+	httpServer         *http.Server
+	running            bool
+	module             *Module // Reference to module for config access
+	readTimeout        time.Duration
+	writeTimeout       time.Duration
+	maxBodySize        int64
+	enableCORS         bool
+	serverHeader       string
+	middleware         []*MiddlewareWrapper
+	errorHandlers      *ErrorHandlerRegistry
+	ginMiddlewareAdded bool         // Flag to prevent multiple Gin middleware additions
+	mu                 sync.RWMutex // Protects running, httpServer fields
 }
 
 // newServer creates a new Server instance with module configuration
@@ -43,6 +47,7 @@ func newServer(module *Module, host string, port int) *Server {
 
 	enableCORS := module.ext.GetBool(configKeyEnableCORS)
 	debugMode := module.ext.GetBool(configKeyDebugMode)
+	serverHeader := module.ext.GetString(configKeyServerHeader)
 
 	// Set gin mode
 	if !debugMode {
@@ -62,6 +67,11 @@ func newServer(module *Module, host string, port int) *Server {
 		sendMethodNotAllowed(c, "Method not allowed")
 	})
 
+	// Configure no route handler to return 404 instead of 405
+	engine.NoRoute(func(c *gin.Context) {
+		sendNotFound(c, "Not found")
+	})
+
 	// Add CORS middleware if enabled
 	if enableCORS {
 		engine.Use(func(c *gin.Context) {
@@ -78,18 +88,93 @@ func newServer(module *Module, host string, port int) *Server {
 		})
 	}
 
-	return &Server{
-		host:         host,
-		port:         port,
-		engine:       engine,
-		httpServer:   nil,
-		running:      false,
-		module:       module,
-		readTimeout:  readTimeout,
-		writeTimeout: writeTimeout,
-		maxBodySize:  maxBodySize,
-		enableCORS:   enableCORS,
+	server := &Server{
+		host:               host,
+		port:               port,
+		engine:             engine,
+		httpServer:         nil,
+		running:            false,
+		module:             module,
+		readTimeout:        readTimeout,
+		writeTimeout:       writeTimeout,
+		maxBodySize:        maxBodySize,
+		enableCORS:         enableCORS,
+		serverHeader:       serverHeader,
+		middleware:         make([]*MiddlewareWrapper, 0),
+		errorHandlers:      NewErrorHandlerRegistry(),
+		ginMiddlewareAdded: false,
 	}
+
+	return server
+}
+
+// applyMiddlewareToGin applies custom middleware to the Gin engine
+// This is called when middleware is added to handle all requests globally
+func (s *Server) applyMiddlewareToGin() {
+	// Only add the global middleware once
+	if s.ginMiddlewareAdded {
+		return
+	}
+	s.ginMiddlewareAdded = true
+
+	// Add a global middleware to handle all requests with custom middleware
+	s.engine.Use(func(c *gin.Context) {
+		// Only apply if we have custom middleware
+		if len(s.middleware) > 0 {
+			// Store original gin context for route handlers
+			c.Set("web_server", s)
+
+			// For OPTIONS requests without specific routes, handle with middleware
+			if c.Request.Method == http.MethodOptions && !s.hasOptionsRoute(c.Request.URL.Path) {
+				// Create a dummy handler that returns 405 by default
+				dummyHandler := func(req *Request) *Response {
+					return &Response{
+						StatusCode: 405,
+						Headers:    map[string]string{"Content-Type": "text/plain"},
+						Body:       "Method not allowed",
+					}
+				}
+
+				// Create request object
+				req := s.createRequest(c)
+
+				// Execute middleware chain for OPTIONS requests
+				var response *Response
+				next := dummyHandler
+				for i := len(s.middleware) - 1; i >= 0; i-- {
+					middleware := s.middleware[i]
+					currentNext := next
+					next = func(req *Request) *Response {
+						return middleware.Execute(req, currentNext)
+					}
+				}
+				response = next(req)
+
+				// Add custom server header
+				if s.serverHeader != "" {
+					if response.Headers == nil {
+						response.Headers = make(map[string]string)
+					}
+					response.Headers["Server"] = s.serverHeader
+				}
+
+				// Apply response and abort further processing
+				s.applyResponse(c, response)
+				c.Abort()
+				return
+			}
+		}
+
+		// Continue with normal processing
+		c.Next()
+	})
+}
+
+// hasOptionsRoute checks if there's a specific OPTIONS route for the given path
+func (s *Server) hasOptionsRoute(path string) bool {
+	// This is a simplified check - in a real implementation, you'd check the Gin router
+	// For now, we'll assume no specific OPTIONS routes are registered
+	return false
 }
 
 // Server methods for Starlark integration
@@ -196,38 +281,70 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 		// Create request object
 		req := s.createRequest(c)
 
-		// Convert to Starlark value using wrapper
-		reqValue := &RequestWrapper{request: req}
+		// Create the final handler function
+		finalHandler := func(req *Request) *Response {
+			// Convert to Starlark value using wrapper
+			reqValue := &RequestWrapper{request: req}
 
-		// Call the handler
-		thread := &starlark.Thread{Name: "web_handler"}
-		result, err := starlark.Call(thread, handler, starlark.Tuple{reqValue}, nil)
-		if err != nil {
-			sendInternalServerError(c, err.Error())
-			return
-		}
-
-		// Handle ResponseWrapper
-		if responseWrapper, ok := result.(*ResponseWrapper); ok {
-			s.applyResponse(c, responseWrapper.response)
-			return
-		}
-
-		// Fallback: try to convert using starlight
-		responseInterface := convert.FromValue(result)
-		if response, ok := responseInterface.(*Response); ok {
-			// Convert old Response to Response
-			httpResp := &Response{
-				StatusCode: response.StatusCode,
-				Headers:    response.Headers,
-				Body:       response.Body,
-				FilePath:   response.FilePath,
+			// Call the handler
+			thread := &starlark.Thread{Name: "web_handler"}
+			result, err := starlark.Call(thread, handler, starlark.Tuple{reqValue}, nil)
+			if err != nil {
+				return &Response{
+					StatusCode: 500,
+					Headers: map[string]string{
+						"Content-Type": "application/json",
+					},
+					Body: fmt.Sprintf(`{"error":"Handler error: %s"}`, err.Error()),
+				}
 			}
-			s.applyResponse(c, httpResp)
-			return
+
+			// Handle ResponseWrapper
+			if responseWrapper, ok := result.(*ResponseWrapper); ok {
+				return responseWrapper.response
+			}
+
+			// Fallback: try to convert using starlight
+			responseInterface := convert.FromValue(result)
+			if response, ok := responseInterface.(*Response); ok {
+				return response
+			}
+
+			return &Response{
+				StatusCode: 500,
+				Headers: map[string]string{
+					"Content-Type": "application/json",
+				},
+				Body: `{"error":"Invalid response format"}`,
+			}
 		}
 
-		sendInternalServerError(c, "Invalid response format")
+		// Execute middleware chain
+		var response *Response
+		if len(s.middleware) > 0 {
+			// Build middleware chain
+			next := finalHandler
+			for i := len(s.middleware) - 1; i >= 0; i-- {
+				mw := s.middleware[i]
+				currentNext := next
+				next = func(req *Request) *Response {
+					return mw.Execute(req, currentNext)
+				}
+			}
+			response = next(req)
+		} else {
+			response = finalHandler(req)
+		}
+
+		// Add custom server header
+		if s.serverHeader != "" {
+			if response.Headers == nil {
+				response.Headers = make(map[string]string)
+			}
+			response.Headers["Server"] = s.serverHeader
+		}
+
+		s.applyResponse(c, response)
 	}
 }
 
@@ -474,13 +591,19 @@ func (sw *ServerWrapper) Attr(name string) (starlark.Value, error) {
 		return starlark.NewBuiltin("is_running", sw.isRunning), nil
 	case "group":
 		return starlark.NewBuiltin("group", sw.group), nil
+	case "use":
+		return starlark.NewBuiltin("use", sw.use), nil
+	case "use_for":
+		return starlark.NewBuiltin("use_for", sw.useFor), nil
+	case "error_handler":
+		return starlark.NewBuiltin("error_handler", sw.errorHandler), nil
 	default:
 		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", sw.Type(), name))
 	}
 }
 
 func (sw *ServerWrapper) AttrNames() []string {
-	return []string{"get", "post", "put", "delete", "patch", "options", "head", "route", "start", "stop", "run", "is_running", "group"}
+	return []string{"get", "post", "put", "delete", "patch", "options", "head", "route", "start", "stop", "run", "is_running", "group", "use", "use_for", "error_handler"}
 }
 
 // Starlark builtin methods
@@ -581,4 +704,71 @@ func (sw *ServerWrapper) group(thread *starlark.Thread, b *starlark.Builtin, arg
 	}
 	group := sw.server.Group(prefix)
 	return &RouteGroupWrapper{group: group}, nil
+}
+
+// use handles the use() method call for adding global middleware.
+func (sw *ServerWrapper) use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var middleware starlark.Value
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "middleware", &middleware); err != nil {
+		return starlark.None, err
+	}
+
+	if mw, ok := middleware.(*MiddlewareWrapper); ok {
+		sw.server.middleware = append(sw.server.middleware, mw)
+	} else if callable, ok := middleware.(starlark.Callable); ok {
+		// Convert Starlark function to middleware
+		starlarkMW := createStarlarkMiddleware(callable)
+		mwWrapper := NewMiddlewareWrapper(starlarkMW)
+		sw.server.middleware = append(sw.server.middleware, mwWrapper)
+	} else {
+		return starlark.None, fmt.Errorf("middleware must be a middleware object or callable")
+	}
+
+	// Apply middleware to Gin engine for OPTIONS requests
+	sw.server.applyMiddlewareToGin()
+
+	return starlark.None, nil
+}
+
+// useFor handles the use_for() method call for adding path-specific middleware.
+func (sw *ServerWrapper) useFor(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var pathPattern string
+	var middleware starlark.Value
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path_pattern", &pathPattern, "middleware", &middleware); err != nil {
+		return starlark.None, err
+	}
+
+	// TODO: Implement path-specific middleware
+	// For now, just add to global middleware
+	return sw.use(thread, b, starlark.Tuple{middleware}, kwargs)
+}
+
+// errorHandler handles the error_handler() method call for registering custom error handlers.
+func (sw *ServerWrapper) errorHandler(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var statusCodes starlark.Value
+	var handler starlark.Callable
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "status_codes", &statusCodes, "handler", &handler); err != nil {
+		return starlark.None, err
+	}
+
+	var codes []int
+	switch sc := statusCodes.(type) {
+	case starlark.Int:
+		if code, ok := sc.Int64(); ok {
+			codes = []int{int(code)}
+		}
+	case *starlark.List:
+		for i := 0; i < sc.Len(); i++ {
+			if codeInt, ok := sc.Index(i).(starlark.Int); ok {
+				if code, ok := codeInt.Int64(); ok {
+					codes = append(codes, int(code))
+				}
+			}
+		}
+	default:
+		return starlark.None, fmt.Errorf("status_codes must be an int or list of ints")
+	}
+
+	sw.server.errorHandlers.RegisterHandler(codes, handler)
+	return starlark.None, nil
 }

@@ -19,6 +19,7 @@ func TestConfigurationUsage(t *testing.T) {
 		genConfigOption(configKeyMaxBodySize, "Custom max body size", int64(64<<20)), // 64MB
 		genConfigOption(configKeyEnableCORS, "Custom CORS setting", true),
 		genConfigOption(configKeyDebugMode, "Custom debug mode", true),
+		genConfigOption(configKeyServerHeader, "Custom server header", "TestServer/1.0"),
 	)
 
 	// Create a server to test configuration usage
@@ -156,6 +157,7 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 		genConfigOption(configKeyMaxBodySize, "Custom max body size", int64(64<<20)), // 64MB
 		genConfigOption(configKeyEnableCORS, "Custom CORS setting", false),
 		genConfigOption(configKeyDebugMode, "Custom debug mode", false),
+		genConfigOption(configKeyServerHeader, "Custom server header", "TimeoutTestServer/1.0"),
 	)
 
 	// Create a server with port 0 to avoid conflicts

@@ -24,6 +24,7 @@ const (
 	configKeyMaxBodySize  = "max_body_size"
 	configKeyEnableCORS   = "enable_cors"
 	configKeyDebugMode    = "debug_mode"
+	configKeyServerHeader = "server_header"
 )
 
 var (
@@ -49,6 +50,7 @@ func NewModule() *Module {
 		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
 		genConfigOption(configKeyEnableCORS, "Enable CORS by default", false),
 		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
+		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 	)
 }
 
@@ -71,6 +73,7 @@ func newModuleWithOptions(
 	maxBodySizeOpt *base.ConfigOption[int64],
 	enableCORSOpt *base.ConfigOption[bool],
 	debugModeOpt *base.ConfigOption[bool],
+	serverHeaderOpt *base.ConfigOption[string],
 ) *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		hostOpt,
@@ -80,6 +83,7 @@ func newModuleWithOptions(
 		maxBodySizeOpt,
 		enableCORSOpt,
 		debugModeOpt,
+		serverHeaderOpt,
 	)
 	return &Module{
 		cfgMod: cm,
@@ -101,6 +105,16 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"error_response": starlark.NewBuiltin(ModuleName+".error_response", m.errorResponse),
 		"send_file":      starlark.NewBuiltin(ModuleName+".send_file", m.sendFile),
 		"send_data":      starlark.NewBuiltin(ModuleName+".send_data", m.sendData),
+		// Authentication functions
+		"api_key_auth": starlark.NewBuiltin(ModuleName+".api_key_auth", m.apiKeyAuth),
+		"bearer_auth":  starlark.NewBuiltin(ModuleName+".bearer_auth", m.bearerAuth),
+		"basic_auth":   starlark.NewBuiltin(ModuleName+".basic_auth", m.basicAuth),
+		// Middleware functions
+		"cors_middleware":             starlark.NewBuiltin(ModuleName+".cors_middleware", m.corsMiddleware),
+		"logging_middleware":          starlark.NewBuiltin(ModuleName+".logging_middleware", m.loggingMiddleware),
+		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", m.securityHeadersMiddleware),
+		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", m.timingMiddleware),
+		"json_middleware":             starlark.NewBuiltin(ModuleName+".json_middleware", m.jsonMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
@@ -110,13 +124,15 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 // that provides Starlark-compatible methods for route registration and server lifecycle.
 func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		host = starlark.String("")
-		port = starlark.MakeInt(0)
+		host         = starlark.String("")
+		port         = starlark.MakeInt(0)
+		serverHeader = starlark.String("")
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"host?", &host,
 		"port?", &port,
+		"server_header?", &serverHeader,
 	); err != nil {
 		return none, err
 	}
@@ -147,6 +163,11 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 
 	// Create server instance using the new constructor
 	server := newServer(m, serverHost, serverPort)
+
+	// Override server header if provided
+	if string(serverHeader) != "" {
+		server.serverHeader = string(serverHeader)
+	}
 
 	// Convert to Starlark value using wrapper
 	return &ServerWrapper{server: server}, nil
@@ -403,4 +424,235 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	}
 
 	return NewResponseWrapper(response), nil
+}
+
+// Authentication functions
+
+// apiKeyAuth creates an API key authenticator
+func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		keys       = starlark.NewList(nil)
+		header     = starlark.String("X-API-Key")
+		queryParam = starlark.String("api_key")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"keys?", &keys,
+		"header?", &header,
+		"query_param?", &queryParam,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert Starlark list to Go slice
+	keySlice := make([]string, keys.Len())
+	for i := 0; i < keys.Len(); i++ {
+		if key, ok := keys.Index(i).(starlark.String); ok {
+			keySlice[i] = string(key)
+		} else {
+			return none, fmt.Errorf("all keys must be strings")
+		}
+	}
+
+	auth := &Authenticator{
+		authType: "api_key",
+		config: map[string]interface{}{
+			"keys":        keySlice,
+			"header":      string(header),
+			"query_param": string(queryParam),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// bearerAuth creates a bearer token authenticator
+func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		validateFunc starlark.Callable
+		header       = starlark.String("Authorization")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"validate_func", &validateFunc,
+		"header?", &header,
+	); err != nil {
+		return none, err
+	}
+
+	auth := &Authenticator{
+		validateFunc: validateFunc,
+		authType:     "bearer",
+		config: map[string]interface{}{
+			"header": string(header),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// basicAuth creates a basic authenticator
+func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		users = starlark.NewDict(0)
+		realm = starlark.String("Restricted")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"users?", &users,
+		"realm?", &realm,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert Starlark dict to Go map
+	userMap := make(map[string]string)
+	for _, item := range users.Items() {
+		key, keyOk := item[0].(starlark.String)
+		value, valueOk := item[1].(starlark.String)
+		if !keyOk || !valueOk {
+			return none, fmt.Errorf("users must be a dict of strings")
+		}
+		userMap[string(key)] = string(value)
+	}
+
+	auth := &Authenticator{
+		authType: "basic",
+		config: map[string]interface{}{
+			"users": userMap,
+			"realm": string(realm),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// Middleware functions
+
+// corsMiddleware creates a CORS middleware
+func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		origins     = starlark.NewList(nil)
+		methods     = starlark.NewList(nil)
+		headers     = starlark.NewList(nil)
+		credentials = starlark.Bool(false)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"origins?", &origins,
+		"methods?", &methods,
+		"headers?", &headers,
+		"credentials?", &credentials,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert lists to slices
+	originsSlice := make([]string, origins.Len())
+	for i := 0; i < origins.Len(); i++ {
+		if origin, ok := origins.Index(i).(starlark.String); ok {
+			originsSlice[i] = string(origin)
+		}
+	}
+
+	methodsSlice := make([]string, methods.Len())
+	for i := 0; i < methods.Len(); i++ {
+		if method, ok := methods.Index(i).(starlark.String); ok {
+			methodsSlice[i] = string(method)
+		}
+	}
+
+	headersSlice := make([]string, headers.Len())
+	for i := 0; i < headers.Len(); i++ {
+		if header, ok := headers.Index(i).(starlark.String); ok {
+			headersSlice[i] = string(header)
+		}
+	}
+
+	middleware := corsMiddleware(originsSlice, methodsSlice, headersSlice, bool(credentials))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// loggingMiddleware creates a logging middleware
+func (m *Module) loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var format = starlark.String("")
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"format?", &format,
+	); err != nil {
+		return none, err
+	}
+
+	middleware := loggingMiddleware(string(format))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// securityHeadersMiddleware creates a security headers middleware
+func (m *Module) securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		frameOptions       = starlark.String("DENY")
+		contentTypeOptions = starlark.String("nosniff")
+		xssProtection      = starlark.String("1; mode=block")
+		hsts               = starlark.String("")
+		csp                = starlark.String("")
+		referrerPolicy     = starlark.String("")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"frame_options?", &frameOptions,
+		"content_type_options?", &contentTypeOptions,
+		"xss_protection?", &xssProtection,
+		"hsts?", &hsts,
+		"csp?", &csp,
+		"referrer_policy?", &referrerPolicy,
+	); err != nil {
+		return none, err
+	}
+
+	config := make(map[string]string)
+	if string(frameOptions) != "" {
+		config["X-Frame-Options"] = string(frameOptions)
+	}
+	if string(contentTypeOptions) != "" {
+		config["X-Content-Type-Options"] = string(contentTypeOptions)
+	}
+	if string(xssProtection) != "" {
+		config["X-XSS-Protection"] = string(xssProtection)
+	}
+	if string(hsts) != "" {
+		config["Strict-Transport-Security"] = string(hsts)
+	}
+	if string(csp) != "" {
+		config["Content-Security-Policy"] = string(csp)
+	}
+	if string(referrerPolicy) != "" {
+		config["Referrer-Policy"] = string(referrerPolicy)
+	}
+
+	middleware := securityHeadersMiddleware(config)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// timingMiddleware creates a timing middleware
+func (m *Module) timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var header = starlark.String("X-Response-Time")
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"header?", &header,
+	); err != nil {
+		return none, err
+	}
+
+	middleware := timingMiddleware(string(header))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// jsonMiddleware creates a JSON middleware
+func (m *Module) jsonMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return none, err
+	}
+
+	middleware := jsonMiddleware()
+	return NewMiddlewareWrapper(middleware), nil
 }
