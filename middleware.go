@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/http"
 	"strings"
 	"time"
 
@@ -79,7 +80,7 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 
 	return func(req *Request, next NextFunc) *Response {
 		// Handle preflight requests
-		if req.Method == "OPTIONS" {
+		if req.Method == http.MethodOptions {
 			return &Response{
 				StatusCode: 204,
 				Headers: map[string]string{
@@ -167,7 +168,7 @@ func timingMiddleware(header string) MiddlewareFunc {
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers[header] = fmt.Sprintf("%.3fms", float64(duration.Nanoseconds())/1e6)
+		response.Headers[header] = fmt.Sprintf("%.3fms", float64(duration)/float64(time.Millisecond))
 
 		return response
 	}
@@ -193,7 +194,7 @@ func jsonMiddleware() MiddlewareFunc {
 			response.Headers = make(map[string]string)
 		}
 
-		// Check if response body looks like JSON
+		// Check if response body looks like JSON, and set content type if so
 		body := strings.TrimSpace(response.Body)
 		if (strings.HasPrefix(body, "{") && strings.HasSuffix(body, "}")) ||
 			(strings.HasPrefix(body, "[") && strings.HasSuffix(body, "]")) {

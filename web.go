@@ -5,6 +5,7 @@ package web
 
 import (
 	"fmt"
+	"net/http"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -458,7 +459,7 @@ func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 		authType: "api_key",
 		config: map[string]interface{}{
 			"keys":        keySlice,
-			"header":      string(header),
+			"header":      http.CanonicalHeaderKey(string(header)),
 			"query_param": string(queryParam),
 		},
 	}
@@ -484,7 +485,7 @@ func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args s
 		validateFunc: validateFunc,
 		authType:     "bearer",
 		config: map[string]interface{}{
-			"header": string(header),
+			"header": http.CanonicalHeaderKey(string(header)),
 		},
 	}
 

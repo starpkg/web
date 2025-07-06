@@ -47,7 +47,7 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 			Headers: map[string]string{
 				"Content-Type": "application/json",
 			},
-			Body: fmt.Sprintf(`{"error":"%s","code":%d}`, http.StatusText(statusCode), statusCode),
+			Body: fmt.Sprintf(`{"error":%q,"code":%d}`, http.StatusText(statusCode), statusCode),
 		}
 	}
 

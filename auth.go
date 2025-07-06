@@ -34,7 +34,7 @@ func (a *Authenticator) Middleware() MiddlewareFunc {
 				Headers: map[string]string{
 					"Content-Type": "application/json",
 				},
-				Body: fmt.Sprintf(`{"error":"%s"}`, result.Message),
+				Body: fmt.Sprintf(`{"error":%q}`, result.Message),
 			}
 		}
 
