@@ -1,9 +1,13 @@
 package web
 
 import (
+	"bytes"
+	"compress/gzip"
 	"fmt"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/1set/starlet/dataconv"
@@ -244,4 +248,329 @@ func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
 		// If not a response wrapper, return error
 		return createJSONErrorResponse(500, "Middleware must return a response")
 	}
+}
+
+// Advanced middleware functions
+
+// compressionMiddleware creates a compression middleware with gzip support
+func compressionMiddleware(level int, minSize int, types []string) MiddlewareFunc {
+	// Validate compression level
+	if level < 1 || level > 9 {
+		level = 6 // Default compression level
+	}
+
+	// Default minimum size
+	if minSize <= 0 {
+		minSize = 1024 // 1KB default
+	}
+
+	// Default compressible types if none provided
+	if len(types) == 0 {
+		types = []string{
+			MIMETextPlain,
+			MIMETextHTML,
+			MIMEApplicationJSON,
+			"text/css",
+			"text/javascript",
+			"application/javascript",
+		}
+	}
+
+	return func(req *Request, next NextFunc) *Response {
+		// Check if client accepts gzip
+		acceptEncoding := req.Headers[canonicalHeader("Accept-Encoding")]
+		if !strings.Contains(acceptEncoding, "gzip") {
+			return next(req)
+		}
+
+		// Process request
+		response := next(req)
+
+		// Check if response should be compressed
+		if len(response.Body) < minSize {
+			return response
+		}
+
+		// Check content type
+		contentType := response.Headers[canonicalHeader(HeaderContentType)]
+		if contentType == "" {
+			// Try to determine from body
+			if isCompressibleContentType(parseContentType(contentType)) {
+				contentType = MIMETextPlain
+			} else {
+				return response
+			}
+		}
+
+		shouldCompress := false
+		mainContentType := parseContentType(contentType)
+		for _, compressibleType := range types {
+			if mainContentType == compressibleType {
+				shouldCompress = true
+				break
+			}
+		}
+
+		if !shouldCompress {
+			return response
+		}
+
+		// Compress response body
+		var buf bytes.Buffer
+		writer, err := gzip.NewWriterLevel(&buf, level)
+		if err != nil {
+			return response // Return uncompressed on error
+		}
+
+		_, err = writer.Write([]byte(response.Body))
+		if err != nil {
+			return response
+		}
+
+		err = writer.Close()
+		if err != nil {
+			return response
+		}
+
+		// Update response
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+		response.Headers[canonicalHeader("Content-Encoding")] = "gzip"
+		response.Headers[canonicalHeader("Vary")] = "Accept-Encoding"
+		response.Headers[canonicalHeader(HeaderContentLength)] = strconv.Itoa(buf.Len())
+		response.Body = buf.String()
+
+		return response
+	}
+}
+
+// RateLimitStorage interface for rate limiting storage backends
+type RateLimitStorage interface {
+	Get(key string) (int, error)
+	Set(key string, value int, ttl time.Duration) error
+	Increment(key string, ttl time.Duration) (int, error)
+}
+
+// MemoryRateLimitStorage implements in-memory rate limiting storage
+type MemoryRateLimitStorage struct {
+	data map[string]*rateLimitEntry
+	mu   sync.RWMutex
+}
+
+type rateLimitEntry struct {
+	count   int
+	expires time.Time
+}
+
+// NewMemoryRateLimitStorage creates a new memory-based rate limit storage
+func NewMemoryRateLimitStorage() *MemoryRateLimitStorage {
+	storage := &MemoryRateLimitStorage{
+		data: make(map[string]*rateLimitEntry),
+	}
+
+	// Start cleanup goroutine
+	go storage.cleanup()
+
+	return storage
+}
+
+func (m *MemoryRateLimitStorage) Get(key string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+
+	if entry, exists := m.data[key]; exists && time.Now().Before(entry.expires) {
+		return entry.count, nil
+	}
+	return 0, nil
+}
+
+func (m *MemoryRateLimitStorage) Set(key string, value int, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	m.data[key] = &rateLimitEntry{
+		count:   value,
+		expires: time.Now().Add(ttl),
+	}
+	return nil
+}
+
+func (m *MemoryRateLimitStorage) Increment(key string, ttl time.Duration) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+
+	now := time.Now()
+	if entry, exists := m.data[key]; exists && now.Before(entry.expires) {
+		entry.count++
+		return entry.count, nil
+	}
+
+	// Create new entry
+	m.data[key] = &rateLimitEntry{
+		count:   1,
+		expires: now.Add(ttl),
+	}
+	return 1, nil
+}
+
+func (m *MemoryRateLimitStorage) cleanup() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for key, entry := range m.data {
+			if now.After(entry.expires) {
+				delete(m.data, key)
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
+// rateLimitMiddleware creates a rate limiting middleware
+func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string, storage RateLimitStorage) MiddlewareFunc {
+	if requests <= 0 {
+		requests = 100 // Default 100 requests
+	}
+	if window <= 0 {
+		window = 60 // Default 60 seconds
+	}
+	if keyFunc == nil {
+		keyFunc = func(req *Request) string {
+			return req.ClientIP
+		}
+	}
+	if storage == nil {
+		storage = NewMemoryRateLimitStorage()
+	}
+
+	windowDuration := time.Duration(window) * time.Second
+
+	return func(req *Request, next NextFunc) *Response {
+		key := createRateLimitKey("rate_limit", keyFunc(req))
+
+		count, err := storage.Increment(key, windowDuration)
+		if err != nil {
+			// On storage error, allow the request
+			return next(req)
+		}
+
+		if count > requests {
+			return createTooManyRequestsResponse(window)
+		}
+
+		// Add rate limit headers to response
+		response := next(req)
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+
+		response.Headers["X-RateLimit-Limit"] = strconv.Itoa(requests)
+		response.Headers["X-RateLimit-Remaining"] = strconv.Itoa(max(0, requests-count))
+		response.Headers["X-RateLimit-Reset"] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
+
+		return response
+	}
+}
+
+// cacheMiddleware creates a response caching middleware
+func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string) MiddlewareFunc {
+	if maxAge <= 0 {
+		maxAge = 3600 // Default 1 hour
+	}
+
+	return func(req *Request, next NextFunc) *Response {
+		// Only cache GET requests
+		if req.Method != http.MethodGet {
+			return next(req)
+		}
+
+		// Check if path matches patterns
+		if len(patterns) > 0 {
+			matched := false
+			for _, pattern := range patterns {
+				if matchesPattern(req.Path, pattern) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return next(req)
+			}
+		}
+
+		response := next(req)
+
+		// Add cache headers
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+
+		cacheControl := fmt.Sprintf("max-age=%d", maxAge)
+		if private {
+			cacheControl = "private, " + cacheControl
+		} else {
+			cacheControl = "public, " + cacheControl
+		}
+		response.Headers[canonicalHeader(HeaderCacheControl)] = cacheControl
+
+		if len(vary) > 0 {
+			response.Headers[canonicalHeader("Vary")] = strings.Join(vary, ", ")
+		}
+
+		return response
+	}
+}
+
+// requestSizeMiddleware creates a middleware that limits request sizes
+func requestSizeMiddleware(maxContentLength int64, maxURLLength int, maxHeaders int) MiddlewareFunc {
+	if maxContentLength <= 0 {
+		maxContentLength = 10 * 1024 * 1024 // Default 10MB
+	}
+	if maxURLLength <= 0 {
+		maxURLLength = 2048 // Default 2KB
+	}
+	if maxHeaders <= 0 {
+		maxHeaders = 100 // Default 100 headers
+	}
+
+	return func(req *Request, next NextFunc) *Response {
+		// Check URL length
+		if len(req.URL) > maxURLLength {
+			return createURITooLongResponse(maxURLLength)
+		}
+
+		// Check number of headers
+		if len(req.Headers) > maxHeaders {
+			return createNotAcceptableResponse(fmt.Sprintf("Too many headers (max: %d)", maxHeaders))
+		}
+
+		// Check content length
+		if len(req.bodyData) > int(maxContentLength) {
+			return createRequestEntityTooLargeResponse(maxContentLength)
+		}
+
+		return next(req)
+	}
+}
+
+// Helper functions
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func matchesPattern(path, pattern string) bool {
+	// Simple pattern matching - supports * wildcard at end
+	if strings.HasSuffix(pattern, "*") {
+		prefix := pattern[:len(pattern)-1]
+		return strings.HasPrefix(path, prefix)
+	}
+	return path == pattern
 }

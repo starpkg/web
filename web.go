@@ -115,6 +115,10 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", m.securityHeadersMiddleware),
 		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", m.timingMiddleware),
 		"json_middleware":             starlark.NewBuiltin(ModuleName+".json_middleware", m.jsonMiddleware),
+		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", m.compressionMiddleware),
+		"rate_limit_middleware":       starlark.NewBuiltin(ModuleName+".rate_limit_middleware", m.rateLimitMiddleware),
+		"cache_middleware":            starlark.NewBuiltin(ModuleName+".cache_middleware", m.cacheMiddleware),
+		"request_size_middleware":     starlark.NewBuiltin(ModuleName+".request_size_middleware", m.requestSizeMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
@@ -621,5 +625,169 @@ func (m *Module) jsonMiddleware(thread *starlark.Thread, b *starlark.Builtin, ar
 	}
 
 	middleware := jsonMiddleware()
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// compressionMiddleware creates a compression middleware
+func (m *Module) compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		level   = starlark.MakeInt(6)
+		minSize = starlark.MakeInt(1024)
+		types   = starlark.NewList(nil)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"level?", &level,
+		"min_size?", &minSize,
+		"types?", &types,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	levelInt, err := starlarkIntToInt(level)
+	if err != nil {
+		return none, fmt.Errorf("invalid level: %v", err)
+	}
+
+	minSizeInt, err := starlarkIntToInt(minSize)
+	if err != nil {
+		return none, fmt.Errorf("invalid min_size: %v", err)
+	}
+
+	typesSlice, err := starlarkListToStringSlice(types)
+	if err != nil {
+		return none, fmt.Errorf("invalid types: %v", err)
+	}
+
+	middleware := compressionMiddleware(levelInt, minSizeInt, typesSlice)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// rateLimitMiddleware creates a rate limiting middleware
+func (m *Module) rateLimitMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		requests                   = starlark.MakeInt(100)
+		window                     = starlark.MakeInt(60)
+		keyFunc  starlark.Callable = nil
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"requests?", &requests,
+		"window?", &window,
+		"key_func?", &keyFunc,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	requestsInt, err := starlarkIntToInt(requests)
+	if err != nil {
+		return none, fmt.Errorf("invalid requests: %v", err)
+	}
+
+	windowInt, err := starlarkIntToInt(window)
+	if err != nil {
+		return none, fmt.Errorf("invalid window: %v", err)
+	}
+
+	// Create key function wrapper
+	var goKeyFunc func(*Request) string
+	if keyFunc != nil {
+		goKeyFunc = func(req *Request) string {
+			thread := &starlark.Thread{Name: "rate_limit_key"}
+			reqWrapper := NewRequestWrapper(req)
+			args := starlark.Tuple{reqWrapper}
+			result, err := starlark.Call(thread, keyFunc, args, nil)
+			if err != nil {
+				return req.ClientIP // fallback to client IP
+			}
+			if str, ok := result.(starlark.String); ok {
+				return string(str)
+			}
+			return req.ClientIP
+		}
+	}
+
+	middleware := rateLimitMiddleware(requestsInt, windowInt, goKeyFunc, nil)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// cacheMiddleware creates a response caching middleware
+func (m *Module) cacheMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		maxAge   = starlark.MakeInt(3600)
+		private  = starlark.Bool(false)
+		patterns = starlark.NewList(nil)
+		vary     = starlark.NewList(nil)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"max_age?", &maxAge,
+		"private?", &private,
+		"patterns?", &patterns,
+		"vary?", &vary,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	maxAgeInt, err := starlarkIntToInt(maxAge)
+	if err != nil {
+		return none, fmt.Errorf("invalid max_age: %v", err)
+	}
+
+	privateBool, err := starlarkBoolToBool(private)
+	if err != nil {
+		return none, fmt.Errorf("invalid private: %v", err)
+	}
+
+	patternsSlice, err := starlarkListToStringSlice(patterns)
+	if err != nil {
+		return none, fmt.Errorf("invalid patterns: %v", err)
+	}
+
+	varySlice, err := starlarkListToStringSlice(vary)
+	if err != nil {
+		return none, fmt.Errorf("invalid vary: %v", err)
+	}
+
+	middleware := cacheMiddleware(maxAgeInt, privateBool, patternsSlice, varySlice)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// requestSizeMiddleware creates a request size limiting middleware
+func (m *Module) requestSizeMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		maxContentLength = starlark.MakeInt(10 * 1024 * 1024) // 10MB
+		maxURLLength     = starlark.MakeInt(2048)
+		maxHeaders       = starlark.MakeInt(100)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"max_content_length?", &maxContentLength,
+		"max_url_length?", &maxURLLength,
+		"max_headers?", &maxHeaders,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	maxContentLengthInt64, ok := maxContentLength.Int64()
+	if !ok {
+		return none, fmt.Errorf("invalid max_content_length")
+	}
+
+	maxURLLengthInt, err := starlarkIntToInt(maxURLLength)
+	if err != nil {
+		return none, fmt.Errorf("invalid max_url_length: %v", err)
+	}
+
+	maxHeadersInt, err := starlarkIntToInt(maxHeaders)
+	if err != nil {
+		return none, fmt.Errorf("invalid max_headers: %v", err)
+	}
+
+	middleware := requestSizeMiddleware(maxContentLengthInt64, maxURLLengthInt, maxHeadersInt)
 	return NewMiddlewareWrapper(middleware), nil
 }

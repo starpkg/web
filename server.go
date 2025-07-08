@@ -49,9 +49,11 @@ func newServer(module *Module, host string, port int) *Server {
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 
-	// Set gin mode
+	// Set gin mode - ensure release mode by default to avoid debug output
 	if !debugMode {
 		gin.SetMode(gin.ReleaseMode)
+	} else {
+		gin.SetMode(gin.DebugMode)
 	}
 
 	// Create gin engine
@@ -107,17 +109,57 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Add CORS middleware if enabled
 	if enableCORS {
-		engine.Use(func(c *gin.Context) {
-			c.Header("Access-Control-Allow-Origin", "*")
-			c.Header("Access-Control-Allow-Methods", "GET, POST, PUT, DELETE, PATCH, OPTIONS, HEAD")
-			c.Header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+		// Use shared CORS middleware implementation with default settings
+		corsHandler := corsMiddleware(
+			[]string{"*"}, // origins
+			[]string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}, // methods
+			[]string{HeaderContentType, HeaderAuthorization},                     // headers
+			false, // credentials
+		)
 
-			if c.Request.Method == "OPTIONS" {
-				c.AbortWithStatus(204)
-				return
+		// Convert to Gin middleware
+		engine.Use(func(c *gin.Context) {
+			// Create request from Gin context
+			req := createRequestFromGin(c)
+
+			// Create next function that continues with Gin processing
+			next := func(req *Request) *Response {
+				// Continue with normal Gin processing
+				c.Next()
+
+				// If response was already written (e.g., by another handler), skip
+				if c.Writer.Written() {
+					return &Response{
+						StatusCode: c.Writer.Status(),
+						Headers:    make(map[string]string),
+						Body:       "",
+					}
+				}
+
+				// Default response (should not be reached in normal flow)
+				return &Response{
+					StatusCode: 200,
+					Headers:    make(map[string]string),
+					Body:       "",
+				}
 			}
 
-			c.Next()
+			// Execute CORS middleware
+			response := corsHandler(req, next)
+
+			// If CORS middleware returned a response (e.g., for OPTIONS), apply it
+			if response.StatusCode != 200 || len(response.Headers) > 0 || response.Body != "" {
+				// Apply CORS headers
+				for key, value := range response.Headers {
+					c.Header(key, value)
+				}
+
+				// If it's an OPTIONS request, respond immediately
+				if c.Request.Method == "OPTIONS" {
+					c.AbortWithStatus(response.StatusCode)
+					return
+				}
+			}
 		})
 	}
 

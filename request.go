@@ -330,10 +330,12 @@ func (rw *RequestWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.B
 	return starlark.String(headerValue), nil
 }
 
-// bearerTokenMethod extracts the Bearer token from the Authorization header.
+// bearerTokenMethod extracts the Bearer token from the specified header.
 // This method provides convenient access to Bearer authentication tokens.
+// Supports custom header names and automatically handles Bearer prefix for Authorization header.
 func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+	var header starlark.String = "Authorization"
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "header?", &header); err != nil {
 		return nil, err
 	}
 
@@ -341,19 +343,32 @@ func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark
 		return starlark.None, nil
 	}
 
-	authHeader := rw.request.ginCtx.GetHeader("Authorization")
+	headerName := string(header)
+	authHeader := rw.request.ginCtx.GetHeader(headerName)
 	if authHeader == "" {
 		return starlark.None, nil
 	}
 
-	// Check if it's a Bearer token
+	// For Authorization header, expect "Bearer " prefix with actual token
+	// For custom headers, use value directly unless it has Bearer prefix
 	const bearerPrefix = "Bearer "
-	if !strings.HasPrefix(authHeader, bearerPrefix) {
-		return starlark.None, nil
+	if headerName == "Authorization" {
+		// Standard Authorization header - must have Bearer prefix with token
+		if !strings.HasPrefix(authHeader, bearerPrefix) {
+			return starlark.None, nil
+		}
+		token := strings.TrimPrefix(authHeader, bearerPrefix)
+		return starlark.String(token), nil
+	} else {
+		// Custom header - check if it has Bearer prefix, if so remove it, otherwise use as-is
+		if strings.HasPrefix(authHeader, bearerPrefix) {
+			token := strings.TrimPrefix(authHeader, bearerPrefix)
+			return starlark.String(token), nil
+		} else {
+			// Use header value directly for custom headers
+			return starlark.String(authHeader), nil
+		}
 	}
-
-	token := strings.TrimPrefix(authHeader, bearerPrefix)
-	return starlark.String(token), nil
 }
 
 // basicAuthMethod extracts username and password from Basic authentication.
