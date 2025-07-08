@@ -468,9 +468,9 @@ func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string
 			response.Headers = make(map[string]string)
 		}
 
-		response.Headers["X-RateLimit-Limit"] = strconv.Itoa(requests)
-		response.Headers["X-RateLimit-Remaining"] = strconv.Itoa(max(0, requests-count))
-		response.Headers["X-RateLimit-Reset"] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
+		response.Headers["X-Ratelimit-Limit"] = strconv.Itoa(requests)
+		response.Headers["X-Ratelimit-Remaining"] = strconv.Itoa(max(0, requests-count))
+		response.Headers["X-Ratelimit-Reset"] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
 
 		return response
 	}
@@ -538,8 +538,20 @@ func requestSizeMiddleware(maxContentLength int64, maxURLLength int, maxHeaders 
 	}
 
 	return func(req *Request, next NextFunc) *Response {
-		// Check URL length
-		if len(req.URL) > maxURLLength {
+		// Check URL length (including query parameters)
+		requestURI := req.Path
+		if len(req.Query) > 0 {
+			// Reconstruct the query string
+			queryParts := make([]string, 0, len(req.Query))
+			for key, value := range req.Query {
+				queryParts = append(queryParts, key+"="+value)
+			}
+			if len(queryParts) > 0 {
+				requestURI = requestURI + "?" + strings.Join(queryParts, "&")
+			}
+		}
+
+		if len(requestURI) > maxURLLength {
 			return createURITooLongResponse(maxURLLength)
 		}
 
