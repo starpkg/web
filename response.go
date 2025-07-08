@@ -6,6 +6,13 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure ResponseWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value       = (*ResponseWrapper)(nil)
+	_ starlark.HasAttrs    = (*ResponseWrapper)(nil)
+	_ starlark.HasSetField = (*ResponseWrapper)(nil)
+)
+
 // Response represents an HTTP response.
 // This structure holds the complete response data including status code,
 // headers, body content, and optional file path for file responses.
@@ -89,8 +96,8 @@ func (rw *ResponseWrapper) AttrNames() []string {
 	return []string{"status_code", "headers", "body", "file_path", "set_cookie", "delete_cookie", "set_header", "get_header"}
 }
 
-// SetAttr sets the value of the specified attribute
-func (rw *ResponseWrapper) SetAttr(name string, value starlark.Value) error {
+// SetField sets the value of the specified field
+func (rw *ResponseWrapper) SetField(name string, value starlark.Value) error {
 	switch name {
 	case "status_code":
 		if statusInt, ok := value.(starlark.Int); ok {
