@@ -11,6 +11,12 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure RequestWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*RequestWrapper)(nil)
+	_ starlark.HasAttrs = (*RequestWrapper)(nil)
+)
+
 // Request represents an HTTP request.
 // This structure holds the complete request data including method, URL, headers,
 // query parameters, and provides access to the underlying gin context for

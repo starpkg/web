@@ -14,6 +14,12 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure ServerWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*ServerWrapper)(nil)
+	_ starlark.HasAttrs = (*ServerWrapper)(nil)
+)
+
 // Server represents an HTTP server instance
 type Server struct {
 	host               string

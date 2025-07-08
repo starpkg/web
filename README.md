@@ -13,12 +13,13 @@ Build modern web applications with Flask-like simplicity and Go performance. The
 - **🚀 High Performance**: Built on Gin framework with Go's performance
 - **🐍 Flask-Inspired**: Familiar API patterns adapted for Starlark
 - **🔒 Security First**: Built-in protection against common vulnerabilities
-- **📊 Request/Response**: Complete HTTP request and response handling
+- **📊 Request/Response**: Complete HTTP request and response handling with full attribute assignment support
 - **🛣️ Flexible Routing**: Support for path parameters and route groups
 - **🔧 Middleware Support**: Comprehensive middleware system with compression, rate limiting, caching, and security headers
 - **📁 Static Files**: Built-in static file serving capabilities
 - **🎯 Error Handling**: Comprehensive error handling and status code management
 - **⚙️ Configurable**: Environment-based configuration with sensible defaults
+- **🔧 Starlark Integration**: Full Starlark interface compliance for all wrapper types
 
 ## 🏗️ Architecture
 
@@ -151,6 +152,14 @@ return error_response(404, "Not found")
 
 # File response
 return send_file("path/to/file.pdf")
+
+# Modify response dynamically
+def handler(req):
+    resp = json_response({"message": "Hello"})
+    resp.status_code = 201
+    resp.body = '{"message": "Created"}'
+    resp.set_header("X-Custom", "value")
+    return resp
 ```
 
 ## 🛣️ Advanced Routing
@@ -833,16 +842,61 @@ def main():
 main()
 ```
 
+## 🔧 Recent Improvements
+
+### Response Object Enhancements
+
+The response object now supports full attribute assignment in Starlark:
+
+```python
+def handler(req):
+    resp = json_response({"initial": "data"})
+    
+    # Modify response attributes directly
+    resp.status_code = 201
+    resp.body = '{"updated": "data"}'
+    
+    # Set custom headers
+    resp.set_header("X-Custom-Header", "value")
+    resp.set_header("X-Processing-Time", "123ms")
+    
+    return resp
+```
+
+### Starlark Interface Compliance
+
+All wrapper types now properly implement Starlark interfaces:
+
+- **ServerWrapper**: `starlark.Value`, `starlark.HasAttrs`
+- **RequestWrapper**: `starlark.Value`, `starlark.HasAttrs`
+- **ResponseWrapper**: `starlark.Value`, `starlark.HasAttrs`, `starlark.HasSetField`
+- **RouteGroupWrapper**: `starlark.Value`, `starlark.HasAttrs`
+- **MiddlewareWrapper**: `starlark.Value`, `starlark.HasAttrs`
+- **AuthenticatorWrapper**: `starlark.Value`, `starlark.HasAttrs`
+
+This ensures proper attribute access and assignment behavior in Starlark scripts.
+
+### Bug Fixes
+
+- ✅ Fixed response body and status code assignment issues
+- ✅ Resolved HTTP module parameter compatibility
+- ✅ Improved cookie handling in tests
+- ✅ Enhanced error handling and debugging output
+- ✅ Fixed CORS middleware integration
+
 ## 🧪 Testing
 
 The module includes comprehensive tests covering:
 
 - ✅ Basic server functionality
 - ✅ HTTP method handling
-- ✅ Response builders
+- ✅ Response builders and response object modification
 - ✅ Route groups and parameters
 - ✅ Error handling
 - ✅ Request/response processing
+- ✅ Middleware functionality
+- ✅ Authentication systems
+- ✅ CORS handling
 
 Run tests:
 
@@ -1026,11 +1080,13 @@ main()
 
 ### Response Object
 
-- `resp.status_code` - HTTP status code
+- `resp.status_code` - HTTP status code (assignable)
 - `resp.headers` - Response headers
-- `resp.body` - Response body
+- `resp.body` - Response body (assignable)
 - `resp.set_cookie(name, value, **options)` - Set cookie
 - `resp.delete_cookie(name, **options)` - Delete cookie
+- `resp.set_header(name, value)` - Set response header
+- `resp.get_header(name, default)` - Get response header with default
 
 ## 🤝 Contributing
 

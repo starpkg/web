@@ -9,6 +9,12 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure RouteGroupWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*RouteGroupWrapper)(nil)
+	_ starlark.HasAttrs = (*RouteGroupWrapper)(nil)
+)
+
 // HTTPMethod represents the supported HTTP methods
 type HTTPMethod string
 

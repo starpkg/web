@@ -9,6 +9,12 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure AuthenticatorWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*AuthenticatorWrapper)(nil)
+	_ starlark.HasAttrs = (*AuthenticatorWrapper)(nil)
+)
+
 // Authenticator represents an authentication handler that can be used as middleware
 type Authenticator struct {
 	validateFunc starlark.Callable

@@ -14,6 +14,12 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// Ensure MiddlewareWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*MiddlewareWrapper)(nil)
+	_ starlark.HasAttrs = (*MiddlewareWrapper)(nil)
+)
+
 // MiddlewareFunc represents a middleware function
 type MiddlewareFunc func(*Request, NextFunc) *Response
 
