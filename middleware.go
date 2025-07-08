@@ -566,21 +566,3 @@ func requestSizeMiddleware(maxContentLength int64, maxURLLength int, maxHeaders 
 		return next(req)
 	}
 }
-
-// Helper functions
-
-func max(a, b int) int {
-	if a > b {
-		return a
-	}
-	return b
-}
-
-func matchesPattern(path, pattern string) bool {
-	// Simple pattern matching - supports * wildcard at end
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		return strings.HasPrefix(path, prefix)
-	}
-	return path == pattern
-}

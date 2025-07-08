@@ -7,6 +7,15 @@ import (
 	"go.starlark.net/starlark"
 )
 
+// ErrorResponse represents a standardized error response.
+// This structure provides a consistent format for all HTTP error responses
+// throughout the web module, including error message, HTTP status code, and description.
+type ErrorResponse struct {
+	Error   string `json:"error"`
+	Message string `json:"message,omitempty"`
+	Code    int    `json:"code"`
+}
+
 // ErrorHandler represents a custom error handler function
 type ErrorHandler struct {
 	statusCodes []int
@@ -80,82 +89,4 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 		},
 		Body: `{"error":"Error handler must return a response"}`,
 	}
-}
-
-// Built-in error handlers
-
-// DefaultNotFoundHandler returns a default 404 error response
-func DefaultNotFoundHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 404,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: fmt.Sprintf(`{"error":"Not Found","message":"The requested resource %s was not found","code":404}`, req.Path),
-	}
-}
-
-// DefaultMethodNotAllowedHandler returns a default 405 error response
-func DefaultMethodNotAllowedHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 405,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: fmt.Sprintf(`{"error":"Method Not Allowed","message":"Method %s is not allowed for %s","code":405}`, req.Method, req.Path),
-	}
-}
-
-// DefaultInternalServerErrorHandler returns a default 500 error response
-func DefaultInternalServerErrorHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 500,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: `{"error":"Internal Server Error","message":"An internal server error occurred","code":500}`,
-	}
-}
-
-// DefaultBadRequestHandler returns a default 400 error response
-func DefaultBadRequestHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 400,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: `{"error":"Bad Request","message":"The request was malformed or invalid","code":400}`,
-	}
-}
-
-// DefaultUnauthorizedHandler returns a default 401 error response
-func DefaultUnauthorizedHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 401,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: `{"error":"Unauthorized","message":"Authentication is required","code":401}`,
-	}
-}
-
-// DefaultForbiddenHandler returns a default 403 error response
-func DefaultForbiddenHandler(req *Request) *Response {
-	return &Response{
-		StatusCode: 403,
-		Headers: map[string]string{
-			"Content-Type": MIMEApplicationJSON,
-		},
-		Body: `{"error":"Forbidden","message":"Access to this resource is forbidden","code":403}`,
-	}
-}
-
-// IsErrorStatus checks if a status code represents an error
-func IsErrorStatus(statusCode int) bool {
-	return statusCode >= 400
-}
-
-// GetDefaultErrorMessage returns a default error message for a status code
-func GetDefaultErrorMessage(statusCode int) string {
-	return http.StatusText(statusCode)
 }

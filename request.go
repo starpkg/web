@@ -10,15 +10,6 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// readerCloser wraps a strings.Reader to implement io.ReadCloser
-type readerCloser struct {
-	*strings.Reader
-}
-
-func (rc *readerCloser) Close() error {
-	return nil
-}
-
 // Request represents an HTTP request.
 // This structure holds the complete request data including method, URL, headers,
 // query parameters, and provides access to the underlying gin context for
@@ -364,10 +355,9 @@ func (rw *RequestWrapper) bearerTokenMethod(thread *starlark.Thread, b *starlark
 		if strings.HasPrefix(authHeader, bearerPrefix) {
 			token := strings.TrimPrefix(authHeader, bearerPrefix)
 			return starlark.String(token), nil
-		} else {
-			// Use header value directly for custom headers
-			return starlark.String(authHeader), nil
 		}
+		// Use header value directly for custom headers
+		return starlark.String(authHeader), nil
 	}
 }
 

@@ -3,6 +3,7 @@ package web
 import (
 	"fmt"
 	"net/http"
+	"strings"
 	"time"
 
 	"github.com/gin-gonic/gin"
@@ -56,13 +57,13 @@ const (
 	HeaderRetryAfter                    = "Retry-After"
 )
 
-// ErrorResponse represents a standardized error response.
-// This structure provides a consistent format for all HTTP error responses
-// throughout the web module, including error message, HTTP status code, and description.
-type ErrorResponse struct {
-	Error   string `json:"error"`
-	Message string `json:"message,omitempty"`
-	Code    int    `json:"code"`
+// readerCloser wraps a strings.Reader to implement io.ReadCloser
+type readerCloser struct {
+	*strings.Reader
+}
+
+func (rc *readerCloser) Close() error {
+	return nil
 }
 
 // canonicalHeader standardizes header key using http.CanonicalHeaderKey
@@ -275,6 +276,22 @@ func starlarkListToIntSlice(list *starlark.List) ([]int, error) {
 		}
 	}
 	return result, nil
+}
+
+func max(a, b int) int {
+	if a > b {
+		return a
+	}
+	return b
+}
+
+func matchesPattern(path, pattern string) bool {
+	// Simple pattern matching - supports * wildcard at end
+	if strings.HasSuffix(pattern, "*") {
+		prefix := pattern[:len(pattern)-1]
+		return strings.HasPrefix(path, prefix)
+	}
+	return path == pattern
 }
 
 // isCompressibleContentType checks if a content type should be compressed
