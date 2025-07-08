@@ -336,8 +336,8 @@ func compressionMiddleware(level int, minSize int, types []string) MiddlewareFun
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers[canonicalHeader("Content-Encoding")] = "gzip"
-		response.Headers[canonicalHeader("Vary")] = "Accept-Encoding"
+		response.Headers[canonicalHeader(HeaderContentEncoding)] = "gzip"
+		response.Headers[canonicalHeader(HeaderVary)] = "Accept-Encoding"
 		response.Headers[canonicalHeader(HeaderContentLength)] = strconv.Itoa(buf.Len())
 		response.Body = buf.String()
 
@@ -468,9 +468,9 @@ func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string
 			response.Headers = make(map[string]string)
 		}
 
-		response.Headers["X-Ratelimit-Limit"] = strconv.Itoa(requests)
-		response.Headers["X-Ratelimit-Remaining"] = strconv.Itoa(max(0, requests-count))
-		response.Headers["X-Ratelimit-Reset"] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
+		response.Headers[HeaderXRateLimitLimit] = strconv.Itoa(requests)
+		response.Headers[HeaderXRateLimitRemaining] = strconv.Itoa(max(0, requests-count))
+		response.Headers[HeaderXRateLimitReset] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
 
 		return response
 	}
@@ -518,7 +518,7 @@ func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string)
 		response.Headers[canonicalHeader(HeaderCacheControl)] = cacheControl
 
 		if len(vary) > 0 {
-			response.Headers[canonicalHeader("Vary")] = strings.Join(vary, ", ")
+			response.Headers[canonicalHeader(HeaderVary)] = strings.Join(vary, ", ")
 		}
 
 		return response

@@ -432,8 +432,14 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 				return
 			}
 
+			// Get content type from response headers
+			contentType := customResponse.Headers[canonicalHeader(HeaderContentType)]
+			if contentType == "" {
+				contentType = MIMEApplicationJSON
+			}
+
 			// Handle regular response
-			c.Data(customResponse.StatusCode, c.GetHeader("Content-Type"), []byte(customResponse.Body))
+			c.Data(customResponse.StatusCode, contentType, []byte(customResponse.Body))
 			return
 		}
 	}
@@ -450,8 +456,14 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 		return
 	}
 
+	// Get content type from response headers
+	contentType := response.Headers[canonicalHeader(HeaderContentType)]
+	if contentType == "" {
+		contentType = MIMEApplicationJSON
+	}
+
 	// Handle regular response
-	c.Data(response.StatusCode, c.GetHeader("Content-Type"), []byte(response.Body))
+	c.Data(response.StatusCode, contentType, []byte(response.Body))
 }
 
 // Start starts the server in a goroutine.

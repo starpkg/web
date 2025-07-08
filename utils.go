@@ -41,6 +41,12 @@ const (
 	HeaderContentSecurityPolicy         = "Content-Security-Policy"
 	HeaderReferrerPolicy                = "Referrer-Policy"
 	HeaderXResponseTime                 = "X-Response-Time"
+	HeaderXRateLimitLimit               = "X-RateLimit-Limit" // Rate limiting headers following IETF draft-polli-ratelimit-headers-02
+	HeaderXRateLimitRemaining           = "X-RateLimit-Remaining"
+	HeaderXRateLimitReset               = "X-RateLimit-Reset"
+	HeaderContentEncoding               = "Content-Encoding"
+	HeaderVary                          = "Vary"
+	HeaderRetryAfter                    = "Retry-After"
 )
 
 // ErrorResponse represents a standardized error response.
@@ -344,7 +350,7 @@ func createTooManyRequestsResponse(retryAfter int) *Response {
 		canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 	}
 	if retryAfter > 0 {
-		headers["Retry-After"] = fmt.Sprintf("%d", retryAfter)
+		headers[HeaderRetryAfter] = fmt.Sprintf("%d", retryAfter)
 	}
 
 	return &Response{
