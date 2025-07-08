@@ -50,10 +50,10 @@ func newServer(module *Module, host string, port int) *Server {
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 
 	// Set gin mode - ensure release mode by default to avoid debug output
-	if !debugMode {
-		gin.SetMode(gin.ReleaseMode)
-	} else {
+	if debugMode {
 		gin.SetMode(gin.DebugMode)
+	} else {
+		gin.SetMode(gin.ReleaseMode)
 	}
 
 	// Create gin engine
@@ -188,7 +188,7 @@ func (s *Server) applyMiddlewareToGin() {
 				dummyHandler := func(req *Request) *Response {
 					return &Response{
 						StatusCode: 405,
-						Headers:    map[string]string{"Content-Type": "text/plain"},
+						Headers:    map[string]string{"Content-Type": MIMETextPlain},
 						Body:       "Method not allowed",
 					}
 				}
@@ -351,7 +351,7 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 				return &Response{
 					StatusCode: 500,
 					Headers: map[string]string{
-						"Content-Type": "application/json",
+						"Content-Type": MIMEApplicationJSON,
 					},
 					Body: fmt.Sprintf(`{"error":"Handler error: %s"}`, err.Error()),
 				}
@@ -371,7 +371,7 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 			return &Response{
 				StatusCode: 500,
 				Headers: map[string]string{
-					"Content-Type": "application/json",
+					"Content-Type": MIMEApplicationJSON,
 				},
 				Body: `{"error":"Invalid response format"}`,
 			}

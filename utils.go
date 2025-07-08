@@ -16,8 +16,15 @@ const (
 	MIMETextPlain              = "text/plain"
 	MIMETextHTML               = "text/html"
 	MIMETextCSV                = "text/csv"
+	MIMETextCSS                = "text/css"
+	MIMETextJavaScript         = "text/javascript"
+	MIMEApplicationJavaScript  = "application/javascript"
 	MIMEApplicationForm        = "application/x-www-form-urlencoded"
 	MIMEMultipartForm          = "multipart/form-data"
+	MIMEApplicationXML         = "application/xml"
+	MIMETextXML                = "text/xml"
+	MIMEApplicationRSSXML      = "application/rss+xml"
+	MIMEApplicationAtomXML     = "application/atom+xml"
 )
 
 // Common header constants
@@ -276,15 +283,15 @@ func isCompressibleContentType(contentType string) bool {
 		MIMETextPlain,
 		MIMETextHTML,
 		MIMETextCSV,
+		MIMETextCSS,
+		MIMETextJavaScript,
 		MIMEApplicationJSON,
+		MIMEApplicationJavaScript,
 		MIMEApplicationForm,
-		"text/css",
-		"text/javascript",
-		"application/javascript",
-		"application/xml",
-		"text/xml",
-		"application/rss+xml",
-		"application/atom+xml",
+		MIMEApplicationXML,
+		MIMETextXML,
+		MIMEApplicationRSSXML,
+		MIMEApplicationAtomXML,
 	}
 
 	mainType := parseContentType(contentType)

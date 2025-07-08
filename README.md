@@ -13,11 +13,13 @@ Build modern web applications with Flask-like simplicity and Go performance. The
 - **🚀 High Performance**: Built on Gin framework with Go's performance
 - **🐍 Flask-Inspired**: Familiar API patterns adapted for Starlark
 - **🔒 Security First**: Built-in protection against common vulnerabilities
+- **🛡️ Advanced Middleware**: Comprehensive middleware system with compression, rate limiting, caching, and security headers
 - **📊 Request/Response**: Complete HTTP request and response handling
 - **🛣️ Flexible Routing**: Support for path parameters and route groups
 - **🔧 Middleware Support**: Extensible middleware system for cross-cutting concerns
 - **📁 Static Files**: Built-in static file serving capabilities
 - **🎯 Error Handling**: Comprehensive error handling and status code management
+- **📏 IETF Compliance**: Rate limiting headers follow [IETF draft-polli-ratelimit-headers-02](https://www.ietf.org/archive/id/draft-polli-ratelimit-headers-02.html)
 - **⚙️ Configurable**: Environment-based configuration with sensible defaults
 
 ## 🏗️ Architecture

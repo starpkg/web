@@ -68,6 +68,45 @@ func (mw *MiddlewareWrapper) Execute(req *Request, next NextFunc) *Response {
 	return mw.middleware(req, next)
 }
 
+// createStarlarkMiddleware creates a middleware from a Starlark function
+func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
+	return func(req *Request, next NextFunc) *Response {
+		// Create request wrapper
+		reqWrapper := NewRequestWrapper(req)
+
+		// Create next function wrapper
+		nextWrapper := starlark.NewBuiltin("next", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var requestArg starlark.Value
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "request", &requestArg); err != nil {
+				return nil, err
+			}
+
+			// Call the actual next function
+			response := next(req)
+
+			// Return response wrapper
+			return NewResponseWrapper(response), nil
+		})
+
+		// Call middleware function
+		thread := &starlark.Thread{Name: "middleware"}
+		args := starlark.Tuple{reqWrapper, nextWrapper}
+		result, err := starlark.Call(thread, middlewareFunc, args, nil)
+		if err != nil {
+			// Return error response
+			return createJSONErrorResponse(500, fmt.Sprintf("Middleware error: %s", err.Error()))
+		}
+
+		// Convert result back to Response
+		if respWrapper, ok := result.(*ResponseWrapper); ok {
+			return respWrapper.response
+		}
+
+		// If not a response wrapper, return error
+		return createJSONErrorResponse(500, "Middleware must return a response")
+	}
+}
+
 // Built-in middleware functions
 
 // corsMiddleware creates a CORS middleware
@@ -211,47 +250,6 @@ func jsonMiddleware() MiddlewareFunc {
 	}
 }
 
-// createStarlarkMiddleware creates a middleware from a Starlark function
-func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
-	return func(req *Request, next NextFunc) *Response {
-		// Create request wrapper
-		reqWrapper := NewRequestWrapper(req)
-
-		// Create next function wrapper
-		nextWrapper := starlark.NewBuiltin("next", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-			var requestArg starlark.Value
-			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "request", &requestArg); err != nil {
-				return nil, err
-			}
-
-			// Call the actual next function
-			response := next(req)
-
-			// Return response wrapper
-			return NewResponseWrapper(response), nil
-		})
-
-		// Call middleware function
-		thread := &starlark.Thread{Name: "middleware"}
-		args := starlark.Tuple{reqWrapper, nextWrapper}
-		result, err := starlark.Call(thread, middlewareFunc, args, nil)
-		if err != nil {
-			// Return error response
-			return createJSONErrorResponse(500, fmt.Sprintf("Middleware error: %s", err.Error()))
-		}
-
-		// Convert result back to Response
-		if respWrapper, ok := result.(*ResponseWrapper); ok {
-			return respWrapper.response
-		}
-
-		// If not a response wrapper, return error
-		return createJSONErrorResponse(500, "Middleware must return a response")
-	}
-}
-
-// Advanced middleware functions
-
 // compressionMiddleware creates a compression middleware with gzip support
 func compressionMiddleware(level int, minSize int, types []string) MiddlewareFunc {
 	// Validate compression level
@@ -270,9 +268,9 @@ func compressionMiddleware(level int, minSize int, types []string) MiddlewareFun
 			MIMETextPlain,
 			MIMETextHTML,
 			MIMEApplicationJSON,
-			"text/css",
-			"text/javascript",
-			"application/javascript",
+			MIMETextCSS,
+			MIMETextJavaScript,
+			MIMEApplicationJavaScript,
 		}
 	}
 

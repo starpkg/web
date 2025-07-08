@@ -45,7 +45,7 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 		return &Response{
 			StatusCode: statusCode,
 			Headers: map[string]string{
-				"Content-Type": "application/json",
+				"Content-Type": MIMEApplicationJSON,
 			},
 			Body: fmt.Sprintf(`{"error":%q,"code":%d}`, http.StatusText(statusCode), statusCode),
 		}
@@ -61,7 +61,7 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 		return &Response{
 			StatusCode: 500,
 			Headers: map[string]string{
-				"Content-Type": "application/json",
+				"Content-Type": MIMEApplicationJSON,
 			},
 			Body: fmt.Sprintf(`{"error":"Error handler failed: %s"}`, err.Error()),
 		}
@@ -76,7 +76,7 @@ func (ehr *ErrorHandlerRegistry) HandleError(statusCode int, req *Request) *Resp
 	return &Response{
 		StatusCode: 500,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: `{"error":"Error handler must return a response"}`,
 	}
@@ -89,7 +89,7 @@ func DefaultNotFoundHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 404,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: fmt.Sprintf(`{"error":"Not Found","message":"The requested resource %s was not found","code":404}`, req.Path),
 	}
@@ -100,7 +100,7 @@ func DefaultMethodNotAllowedHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 405,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: fmt.Sprintf(`{"error":"Method Not Allowed","message":"Method %s is not allowed for %s","code":405}`, req.Method, req.Path),
 	}
@@ -111,7 +111,7 @@ func DefaultInternalServerErrorHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 500,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: `{"error":"Internal Server Error","message":"An internal server error occurred","code":500}`,
 	}
@@ -122,7 +122,7 @@ func DefaultBadRequestHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 400,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: `{"error":"Bad Request","message":"The request was malformed or invalid","code":400}`,
 	}
@@ -133,7 +133,7 @@ func DefaultUnauthorizedHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 401,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: `{"error":"Unauthorized","message":"Authentication is required","code":401}`,
 	}
@@ -144,7 +144,7 @@ func DefaultForbiddenHandler(req *Request) *Response {
 	return &Response{
 		StatusCode: 403,
 		Headers: map[string]string{
-			"Content-Type": "application/json",
+			"Content-Type": MIMEApplicationJSON,
 		},
 		Body: `{"error":"Forbidden","message":"Access to this resource is forbidden","code":403}`,
 	}
