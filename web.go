@@ -174,7 +174,7 @@ func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args
 	}
 
 	// Convert to Starlark value using wrapper
-	return &ServerWrapper{server: server}, nil
+	return NewServerWrapper(server), nil
 }
 
 // Response builders
