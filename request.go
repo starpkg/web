@@ -2,10 +2,11 @@ package web
 
 import (
 	"fmt"
+	"io"
+	"mime/multipart"
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"github.com/gin-gonic/gin"
 	"go.starlark.net/starlark"
 )
@@ -129,23 +130,11 @@ func (rw *RequestWrapper) Attr(name string) (starlark.Value, error) {
 	case "proto":
 		return starlark.String(rw.request.Proto), nil
 	case "headers":
-		val, err := convert.ToValue(rw.request.Headers)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
+		return dataconv.Marshal(rw.request.Headers)
 	case "query":
-		val, err := convert.ToValue(rw.request.Query)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
+		return dataconv.Marshal(rw.request.Query)
 	case "context":
-		val, err := convert.ToValue(rw.request.Context)
-		if err != nil {
-			return nil, err
-		}
-		return val, nil
+		return dataconv.Marshal(rw.request.Context)
 	case "body":
 		return starlark.NewBuiltin("body", rw.bodyMethod), nil
 	case "json":
@@ -255,9 +244,79 @@ func (rw *RequestWrapper) filesMethod(thread *starlark.Thread, b *starlark.Built
 		return nil, err
 	}
 
-	// TODO: Implement file upload handling
-	// For now, return empty dict
-	return starlark.NewDict(0), nil
+	if rw.request.ginCtx == nil {
+		return starlark.NewDict(0), nil
+	}
+
+	// Parse multipart form
+	form, err := rw.request.ginCtx.MultipartForm()
+	if err != nil {
+		// If multipart form parsing fails, return empty dict
+		return starlark.NewDict(0), nil
+	}
+
+	// Create Starlark dict to hold file information
+	filesDict := starlark.NewDict(len(form.File))
+
+	// Process each file field
+	for fieldName, fileHeaders := range form.File {
+		if len(fileHeaders) == 1 {
+			// Single file
+			fileInfo := createFileInfo(fileHeaders[0])
+			filesDict.SetKey(starlark.String(fieldName), fileInfo)
+		} else {
+			// Multiple files - create a list
+			fileList := make([]starlark.Value, len(fileHeaders))
+			for i, fileHeader := range fileHeaders {
+				fileList[i] = createFileInfo(fileHeader)
+			}
+			filesDict.SetKey(starlark.String(fieldName), starlark.NewList(fileList))
+		}
+	}
+
+	return filesDict, nil
+}
+
+// createFileInfo creates a Starlark dict containing file information
+func createFileInfo(fileHeader *multipart.FileHeader) starlark.Value {
+	fileDict := starlark.NewDict(4)
+
+	// Basic file information
+	fileDict.SetKey(starlark.String("filename"), starlark.String(fileHeader.Filename))
+	fileDict.SetKey(starlark.String("size"), starlark.MakeInt64(fileHeader.Size))
+
+	// Content type from header
+	contentType := fileHeader.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = "application/octet-stream"
+	}
+	fileDict.SetKey(starlark.String("content_type"), starlark.String(contentType))
+
+	// Create a method to read file content
+	readMethod := starlark.NewBuiltin("read", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+			return nil, err
+		}
+
+		// Open the file
+		file, err := fileHeader.Open()
+		if err != nil {
+			return starlark.None, nil
+		}
+		defer file.Close()
+
+		// Read all content
+		content, err := io.ReadAll(file)
+		if err != nil {
+			return starlark.None, nil
+		}
+
+		return starlark.String(string(content)), nil
+	})
+
+	fileDict.SetKey(starlark.String("read"), readMethod)
+
+	return fileDict
 }
 
 // cookieMethod returns the value of a specific cookie.

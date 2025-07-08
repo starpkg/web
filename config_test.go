@@ -17,7 +17,6 @@ func TestConfigurationUsage(t *testing.T) {
 		genConfigOption(configKeyReadTimeout, "Custom read timeout", 60),             // 60 seconds
 		genConfigOption(configKeyWriteTimeout, "Custom write timeout", 45),           // 45 seconds
 		genConfigOption(configKeyMaxBodySize, "Custom max body size", int64(64<<20)), // 64MB
-		genConfigOption(configKeyEnableCORS, "Custom CORS setting", true),
 		genConfigOption(configKeyDebugMode, "Custom debug mode", true),
 		genConfigOption(configKeyServerHeader, "Custom server header", "TestServer/1.0"),
 	)
@@ -46,9 +45,7 @@ func TestConfigurationUsage(t *testing.T) {
 		t.Errorf("Expected max body size 64MB (%d), got %d", int64(64<<20), server.maxBodySize)
 	}
 
-	if !server.enableCORS {
-		t.Error("Expected CORS to be enabled")
-	}
+	// CORS is now only available via middleware, not server config
 }
 
 // TestEnvironmentVariableConfiguration tests that environment variables are properly used
@@ -58,13 +55,11 @@ func TestEnvironmentVariableConfiguration(t *testing.T) {
 	os.Setenv("web_port", "8888")
 	os.Setenv("web_read_timeout", "120")
 	os.Setenv("web_write_timeout", "90")
-	os.Setenv("web_enable_cors", "true")
 	defer func() {
 		os.Unsetenv("web_host")
 		os.Unsetenv("web_port")
 		os.Unsetenv("web_read_timeout")
 		os.Unsetenv("web_write_timeout")
-		os.Unsetenv("web_enable_cors")
 	}()
 
 	// Create a module that should pick up environment variables
@@ -75,7 +70,6 @@ func TestEnvironmentVariableConfiguration(t *testing.T) {
 	port := module.ext.GetInt(configKeyPort)
 	readTimeout := module.ext.GetInt(configKeyReadTimeout)
 	writeTimeout := module.ext.GetInt(configKeyWriteTimeout)
-	enableCORS := module.ext.GetBool(configKeyEnableCORS)
 
 	if host != "env-host" {
 		t.Errorf("Expected host from env 'env-host', got '%s'", host)
@@ -93,9 +87,7 @@ func TestEnvironmentVariableConfiguration(t *testing.T) {
 		t.Errorf("Expected write timeout from env 90, got %d", writeTimeout)
 	}
 
-	if !enableCORS {
-		t.Error("Expected CORS to be enabled from env")
-	}
+	// CORS is now only available via middleware, not configuration
 }
 
 // TestDefaultConfiguration tests that default configuration values are correct
@@ -107,7 +99,6 @@ func TestDefaultConfiguration(t *testing.T) {
 	port := module.ext.GetInt(configKeyPort)
 	readTimeout := module.ext.GetInt(configKeyReadTimeout)
 	writeTimeout := module.ext.GetInt(configKeyWriteTimeout)
-	enableCORS := module.ext.GetBool(configKeyEnableCORS)
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 
 	if host != "localhost" {
@@ -126,9 +117,7 @@ func TestDefaultConfiguration(t *testing.T) {
 		t.Errorf("Expected default write timeout 30, got %d", writeTimeout)
 	}
 
-	if enableCORS {
-		t.Error("Expected default CORS to be disabled")
-	}
+	// CORS is now only available via middleware, not configuration
 
 	if debugMode {
 		t.Error("Expected default debug mode to be disabled")
@@ -155,7 +144,6 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 		genConfigOption(configKeyReadTimeout, "Custom read timeout", 120),            // 2 minutes
 		genConfigOption(configKeyWriteTimeout, "Custom write timeout", 180),          // 3 minutes
 		genConfigOption(configKeyMaxBodySize, "Custom max body size", int64(64<<20)), // 64MB
-		genConfigOption(configKeyEnableCORS, "Custom CORS setting", false),
 		genConfigOption(configKeyDebugMode, "Custom debug mode", false),
 		genConfigOption(configKeyServerHeader, "Custom server header", "TimeoutTestServer/1.0"),
 	)

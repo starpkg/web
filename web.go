@@ -22,7 +22,6 @@ const (
 	configKeyReadTimeout  = "read_timeout"
 	configKeyWriteTimeout = "write_timeout"
 	configKeyMaxBodySize  = "max_body_size"
-	configKeyEnableCORS   = "enable_cors"
 	configKeyDebugMode    = "debug_mode"
 	configKeyServerHeader = "server_header"
 )
@@ -48,7 +47,6 @@ func NewModule() *Module {
 		genConfigOption(configKeyReadTimeout, "Read timeout in seconds", 30),
 		genConfigOption(configKeyWriteTimeout, "Write timeout in seconds", 30),
 		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
-		genConfigOption(configKeyEnableCORS, "Enable CORS by default", false),
 		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
 		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 	)
@@ -71,7 +69,6 @@ func newModuleWithOptions(
 	readTimeoutOpt *base.ConfigOption[int],
 	writeTimeoutOpt *base.ConfigOption[int],
 	maxBodySizeOpt *base.ConfigOption[int64],
-	enableCORSOpt *base.ConfigOption[bool],
 	debugModeOpt *base.ConfigOption[bool],
 	serverHeaderOpt *base.ConfigOption[string],
 ) *Module {
@@ -81,7 +78,6 @@ func newModuleWithOptions(
 		readTimeoutOpt,
 		writeTimeoutOpt,
 		maxBodySizeOpt,
-		enableCORSOpt,
 		debugModeOpt,
 		serverHeaderOpt,
 	)
@@ -101,6 +97,8 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"response":       starlark.NewBuiltin(ModuleName+".response", m.response),
 		"json_response":  starlark.NewBuiltin(ModuleName+".json_response", m.jsonResponse),
 		"html_response":  starlark.NewBuiltin(ModuleName+".html_response", m.htmlResponse),
+		"text_response":  starlark.NewBuiltin(ModuleName+".text_response", m.textResponse),
+		"file_response":  starlark.NewBuiltin(ModuleName+".file_response", m.fileResponse),
 		"redirect":       starlark.NewBuiltin(ModuleName+".redirect", m.redirect),
 		"error_response": starlark.NewBuiltin(ModuleName+".error_response", m.errorResponse),
 		"send_file":      starlark.NewBuiltin(ModuleName+".send_file", m.sendFile),
@@ -299,6 +297,67 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		StatusCode: int(statusCode),
 		Headers:    headerMap,
 		Body:       string(content),
+	}
+
+	return NewResponseWrapper(response), nil
+}
+
+// textResponse creates a text response
+func (m *Module) textResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		text   = starlark.String("")
+		status = starlark.MakeInt(200)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"text", &text,
+		"status?", &status,
+	); err != nil {
+		return none, err
+	}
+
+	statusCode, _ := status.Int64()
+
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType): MIMETextPlain,
+		},
+		Body: string(text),
+	}
+
+	return NewResponseWrapper(response), nil
+}
+
+// fileResponse creates a file response
+func (m *Module) fileResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		filepath    = starlark.String("")
+		contentType = starlark.String("")
+		filename    = starlark.String("")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"filepath", &filepath,
+		"content_type?", &contentType,
+		"filename?", &filename,
+	); err != nil {
+		return none, err
+	}
+
+	response := &Response{
+		StatusCode: 200,
+		Headers:    map[string]string{},
+		Body:       "",
+		FilePath:   string(filepath),
+	}
+
+	if contentType != "" {
+		response.Headers[canonicalHeader(HeaderContentType)] = string(contentType)
+	}
+
+	if filename != "" {
+		response.Headers[canonicalHeader(HeaderContentDisposition)] = fmt.Sprintf("attachment; filename=%s", string(filename))
 	}
 
 	return NewResponseWrapper(response), nil

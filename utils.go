@@ -10,54 +10,49 @@ import (
 	"go.starlark.net/starlark"
 )
 
-// MIME type constants to avoid hardcoding throughout the module
+// MIME types
 const (
 	MIMEApplicationJSON        = "application/json"
-	MIMEApplicationOctetStream = "application/octet-stream"
-	MIMETextPlain              = "text/plain"
+	MIMEApplicationJavaScript  = "application/javascript"
 	MIMETextHTML               = "text/html"
-	MIMETextCSV                = "text/csv"
+	MIMETextPlain              = "text/plain"
 	MIMETextCSS                = "text/css"
 	MIMETextJavaScript         = "text/javascript"
-	MIMEApplicationJavaScript  = "application/javascript"
-	MIMEApplicationForm        = "application/x-www-form-urlencoded"
 	MIMEMultipartForm          = "multipart/form-data"
-	MIMEApplicationXML         = "application/xml"
-	MIMETextXML                = "text/xml"
-	MIMEApplicationRSSXML      = "application/rss+xml"
-	MIMEApplicationAtomXML     = "application/atom+xml"
+	MIMEApplicationForm        = "application/x-www-form-urlencoded"
+	MIMEApplicationOctetStream = "application/octet-stream"
 )
 
-// Common header constants
+// Header names
 const (
-	HeaderContentType                   = "Content-Type"
-	HeaderContentLength                 = "Content-Length"
-	HeaderContentDisposition            = "Content-Disposition"
-	HeaderAuthorization                 = "Authorization"
-	HeaderAPIKey                        = "X-API-Key"
-	HeaderServer                        = "Server"
-	HeaderLocation                      = "Location"
-	HeaderCacheControl                  = "Cache-Control"
+	HeaderContentType        = "Content-Type"
+	HeaderContentLength      = "Content-Length"
+	HeaderContentDisposition = "Content-Disposition"
+	HeaderContentEncoding    = "Content-Encoding"
+	HeaderAuthorization      = "Authorization"
+	HeaderAPIKey             = "X-API-Key"
+	HeaderCacheControl       = "Cache-Control"
+	HeaderServer             = "Server"
+	HeaderLocation           = "Location"
+	HeaderVary               = "Vary"
+	HeaderRetryAfter         = "Retry-After"
+
+	// CORS headers
 	HeaderAccessControlAllowOrigin      = "Access-Control-Allow-Origin"
 	HeaderAccessControlAllowMethods     = "Access-Control-Allow-Methods"
 	HeaderAccessControlAllowHeaders     = "Access-Control-Allow-Headers"
 	HeaderAccessControlAllowCredentials = "Access-Control-Allow-Credentials"
-	HeaderXFrameOptions                 = "X-Frame-Options"
-	HeaderXContentTypeOptions           = "X-Content-Type-Options"
-	HeaderXXSSProtection                = "X-XSS-Protection"
-	HeaderStrictTransportSecurity       = "Strict-Transport-Security"
-	HeaderContentSecurityPolicy         = "Content-Security-Policy"
-	HeaderReferrerPolicy                = "Referrer-Policy"
-	HeaderXResponseTime                 = "X-Response-Time"
-	HeaderXRateLimitLimit               = "X-RateLimit-Limit" // Rate limiting headers following IETF draft-polli-ratelimit-headers-02
-	HeaderXRateLimitRemaining           = "X-RateLimit-Remaining"
-	HeaderXRateLimitReset               = "X-RateLimit-Reset"
-	HeaderContentEncoding               = "Content-Encoding"
-	HeaderVary                          = "Vary"
-	HeaderRetryAfter                    = "Retry-After"
+
+	// Response time header
+	HeaderXResponseTime = "X-Response-Time"
+
+	// Rate limiting headers
+	HeaderXRateLimitLimit     = "X-RateLimit-Limit"
+	HeaderXRateLimitRemaining = "X-RateLimit-Remaining"
+	HeaderXRateLimitReset     = "X-RateLimit-Reset"
 )
 
-// readerCloser wraps a strings.Reader to implement io.ReadCloser
+// readerCloser wraps a strings.Reader to make it closeable
 type readerCloser struct {
 	*strings.Reader
 }
@@ -134,16 +129,6 @@ func sendBadRequest(c *gin.Context, message string) {
 	sendErrorResponse(c, http.StatusBadRequest, message)
 }
 
-// sendUnauthorized sends a 401 Unauthorized response
-func sendUnauthorized(c *gin.Context, message string) {
-	sendErrorResponse(c, http.StatusUnauthorized, message)
-}
-
-// sendForbidden sends a 403 Forbidden response
-func sendForbidden(c *gin.Context, message string) {
-	sendErrorResponse(c, http.StatusForbidden, message)
-}
-
 // sendNotFound sends a 404 Not Found response
 func sendNotFound(c *gin.Context, message string) {
 	sendErrorResponse(c, http.StatusNotFound, message)
@@ -152,68 +137,6 @@ func sendNotFound(c *gin.Context, message string) {
 // sendMethodNotAllowed sends a 405 Method Not Allowed response
 func sendMethodNotAllowed(c *gin.Context, message string) {
 	sendErrorResponse(c, http.StatusMethodNotAllowed, message)
-}
-
-// sendInternalServerError sends a 500 Internal Server Error response
-func sendInternalServerError(c *gin.Context, message string) {
-	sendErrorResponse(c, http.StatusInternalServerError, message)
-}
-
-// safeString safely converts a value to string, handling nil cases
-func safeString(value interface{}) string {
-	if value == nil {
-		return ""
-	}
-	return fmt.Sprintf("%v", value)
-}
-
-// getClientIP extracts the client IP from the request, checking various headers.
-// This function checks multiple common headers used by proxies and load balancers
-// to determine the real client IP address, falling back to the direct connection IP.
-func getClientIP(c *gin.Context) string {
-	// Check X-Forwarded-For header first
-	if xff := c.GetHeader("X-Forwarded-For"); xff != "" {
-		// Take the first IP in the list
-		for i, char := range xff {
-			if char == ',' || char == ' ' {
-				return xff[:i]
-			}
-		}
-		return xff
-	}
-
-	// Check X-Real-IP header
-	if xri := c.GetHeader("X-Real-IP"); xri != "" {
-		return xri
-	}
-
-	// Check X-Forwarded header
-	if xf := c.GetHeader("X-Forwarded"); xf != "" {
-		return xf
-	}
-
-	// Check X-Cluster-Client-IP header
-	if xcci := c.GetHeader("X-Cluster-Client-IP"); xcci != "" {
-		return xcci
-	}
-
-	// Fall back to RemoteAddr
-	return c.ClientIP()
-}
-
-// validateContentType checks if the content type is valid for the given types
-func validateContentType(contentType string, allowedTypes []string) bool {
-	if len(allowedTypes) == 0 {
-		return true
-	}
-
-	for _, allowed := range allowedTypes {
-		if contentType == allowed {
-			return true
-		}
-	}
-
-	return false
 }
 
 // parseContentType extracts the main content type from a Content-Type header
@@ -269,7 +192,7 @@ func starlarkListToIntSlice(list *starlark.List) ([]int, error) {
 			if val, ok := intVal.Int64(); ok {
 				result[i] = int(val)
 			} else {
-				return nil, fmt.Errorf("list item at index %d is too large", i)
+				return nil, fmt.Errorf("integer value at index %d too large", i)
 			}
 		} else {
 			return nil, fmt.Errorf("list item at index %d is not an integer", i)
@@ -278,6 +201,7 @@ func starlarkListToIntSlice(list *starlark.List) ([]int, error) {
 	return result, nil
 }
 
+// max returns the maximum of two integers
 func max(a, b int) int {
 	if a > b {
 		return a
@@ -285,35 +209,28 @@ func max(a, b int) int {
 	return b
 }
 
+// matchesPattern checks if a path matches a glob-like pattern
 func matchesPattern(path, pattern string) bool {
-	// Simple pattern matching - supports * wildcard at end
-	if strings.HasSuffix(pattern, "*") {
-		prefix := pattern[:len(pattern)-1]
-		return strings.HasPrefix(path, prefix)
-	}
-	return path == pattern
+	// Simple pattern matching - could be enhanced with full glob support
+	return strings.Contains(path, strings.TrimSuffix(pattern, "*"))
 }
 
 // isCompressibleContentType checks if a content type should be compressed
 func isCompressibleContentType(contentType string) bool {
 	compressibleTypes := []string{
-		MIMETextPlain,
-		MIMETextHTML,
-		MIMETextCSV,
-		MIMETextCSS,
-		MIMETextJavaScript,
-		MIMEApplicationJSON,
-		MIMEApplicationJavaScript,
-		MIMEApplicationForm,
-		MIMEApplicationXML,
-		MIMETextXML,
-		MIMEApplicationRSSXML,
-		MIMEApplicationAtomXML,
+		"text/",
+		"application/json",
+		"application/javascript",
+		"application/xml",
+		"application/atom+xml",
+		"application/rss+xml",
+		"application/svg+xml",
+		"image/svg+xml",
 	}
 
 	mainType := parseContentType(contentType)
 	for _, compressible := range compressibleTypes {
-		if mainType == compressible {
+		if strings.HasPrefix(mainType, compressible) {
 			return true
 		}
 	}
@@ -334,29 +251,7 @@ func formatBytes(bytes int64) string {
 	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
 }
 
-// isValidHTTPMethod checks if a string is a valid HTTP method
-func isValidHTTPMethod(method string) bool {
-	validMethods := []string{
-		http.MethodGet,
-		http.MethodPost,
-		http.MethodPut,
-		http.MethodDelete,
-		http.MethodPatch,
-		http.MethodOptions,
-		http.MethodHead,
-		http.MethodConnect,
-		http.MethodTrace,
-	}
-
-	for _, valid := range validMethods {
-		if method == valid {
-			return true
-		}
-	}
-	return false
-}
-
-// createRateLimitKey creates a consistent key for rate limiting
+// createRateLimitKey creates a key for rate limiting
 func createRateLimitKey(prefix, identifier string) string {
 	return fmt.Sprintf("%s:%s", prefix, identifier)
 }
@@ -366,21 +261,15 @@ func getCurrentTimeWindow(windowSize int) int64 {
 	return time.Now().Unix() / int64(windowSize)
 }
 
-// Additional error response builders for middleware
-
 // createTooManyRequestsResponse creates a 429 Too Many Requests response
 func createTooManyRequestsResponse(retryAfter int) *Response {
-	headers := map[string]string{
-		canonicalHeader(HeaderContentType): MIMEApplicationJSON,
-	}
-	if retryAfter > 0 {
-		headers[HeaderRetryAfter] = fmt.Sprintf("%d", retryAfter)
-	}
-
 	return &Response{
 		StatusCode: http.StatusTooManyRequests,
-		Headers:    headers,
-		Body:       `{"error":"Too Many Requests","code":429}`,
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
+			canonicalHeader(HeaderRetryAfter):  fmt.Sprintf("%d", retryAfter),
+		},
+		Body: fmt.Sprintf(`{"error":"Rate limit exceeded","code":%d}`, http.StatusTooManyRequests),
 	}
 }
 
@@ -391,7 +280,7 @@ func createRequestEntityTooLargeResponse(maxSize int64) *Response {
 		Headers: map[string]string{
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 		},
-		Body: fmt.Sprintf(`{"error":"Request Entity Too Large","code":413,"max_size":"%s"}`, formatBytes(maxSize)),
+		Body: fmt.Sprintf(`{"error":"Request body too large","max_size":%d,"code":%d}`, maxSize, http.StatusRequestEntityTooLarge),
 	}
 }
 
@@ -402,7 +291,7 @@ func createURITooLongResponse(maxLength int) *Response {
 		Headers: map[string]string{
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 		},
-		Body: fmt.Sprintf(`{"error":"URI Too Long","code":414,"max_length":%d}`, maxLength),
+		Body: fmt.Sprintf(`{"error":"URI too long","max_length":%d,"code":%d}`, maxLength, http.StatusRequestURITooLong),
 	}
 }
 
@@ -413,7 +302,7 @@ func createNotAcceptableResponse(message string) *Response {
 		Headers: map[string]string{
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 		},
-		Body: fmt.Sprintf(`{"error":"Not Acceptable","code":406,"message":%q}`, message),
+		Body: fmt.Sprintf(`{"error":"Not acceptable","message":%q,"code":%d}`, message, http.StatusNotAcceptable),
 	}
 }
 
@@ -424,6 +313,6 @@ func createUnsupportedMediaTypeResponse(contentType string) *Response {
 		Headers: map[string]string{
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 		},
-		Body: fmt.Sprintf(`{"error":"Unsupported Media Type","code":415,"content_type":%q}`, contentType),
+		Body: fmt.Sprintf(`{"error":"Unsupported media type","content_type":%q,"code":%d}`, contentType, http.StatusUnsupportedMediaType),
 	}
 }

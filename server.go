@@ -25,7 +25,6 @@ type Server struct {
 	readTimeout        time.Duration
 	writeTimeout       time.Duration
 	maxBodySize        int64
-	enableCORS         bool
 	serverHeader       string
 	middleware         []*MiddlewareWrapper
 	errorHandlers      *ErrorHandlerRegistry
@@ -45,7 +44,6 @@ func newServer(module *Module, host string, port int) *Server {
 		maxBodySize = int64(32 << 20) // Default 32MB if config fails
 	}
 
-	enableCORS := module.ext.GetBool(configKeyEnableCORS)
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 
@@ -77,7 +75,6 @@ func newServer(module *Module, host string, port int) *Server {
 		readTimeout:        readTimeout,
 		writeTimeout:       writeTimeout,
 		maxBodySize:        maxBodySize,
-		enableCORS:         enableCORS,
 		serverHeader:       serverHeader,
 		middleware:         make([]*MiddlewareWrapper, 0),
 		errorHandlers:      NewErrorHandlerRegistry(),
@@ -106,62 +103,6 @@ func newServer(module *Module, host string, port int) *Server {
 			sendNotFound(c, "Not found")
 		}
 	})
-
-	// Add CORS middleware if enabled
-	if enableCORS {
-		// Use shared CORS middleware implementation with default settings
-		corsHandler := corsMiddleware(
-			[]string{"*"}, // origins
-			[]string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}, // methods
-			[]string{HeaderContentType, HeaderAuthorization},                     // headers
-			false, // credentials
-		)
-
-		// Convert to Gin middleware
-		engine.Use(func(c *gin.Context) {
-			// Create request from Gin context
-			req := createRequestFromGin(c)
-
-			// Create next function that continues with Gin processing
-			next := func(req *Request) *Response {
-				// Continue with normal Gin processing
-				c.Next()
-
-				// If response was already written (e.g., by another handler), skip
-				if c.Writer.Written() {
-					return &Response{
-						StatusCode: c.Writer.Status(),
-						Headers:    make(map[string]string),
-						Body:       "",
-					}
-				}
-
-				// Default response (should not be reached in normal flow)
-				return &Response{
-					StatusCode: 200,
-					Headers:    make(map[string]string),
-					Body:       "",
-				}
-			}
-
-			// Execute CORS middleware
-			response := corsHandler(req, next)
-
-			// If CORS middleware returned a response (e.g., for OPTIONS), apply it
-			if response.StatusCode != 200 || len(response.Headers) > 0 || response.Body != "" {
-				// Apply CORS headers
-				for key, value := range response.Headers {
-					c.Header(key, value)
-				}
-
-				// If it's an OPTIONS request, respond immediately
-				if c.Request.Method == "OPTIONS" {
-					c.AbortWithStatus(response.StatusCode)
-					return
-				}
-			}
-		})
-	}
 
 	return server
 }
@@ -245,7 +186,7 @@ func (s *Server) applyMiddlewareToGin() {
 					if response.Headers == nil {
 						response.Headers = make(map[string]string)
 					}
-					response.Headers["Server"] = s.serverHeader
+					response.Headers[HeaderServer] = s.serverHeader
 				}
 
 				// Apply response and abort further processing
