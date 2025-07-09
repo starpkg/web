@@ -209,13 +209,6 @@ func max(a, b int) int {
 	return b
 }
 
-// matchesPattern checks if a path matches a glob-like pattern
-// This function is deprecated in favor of the unified PathMatcher.
-// It's kept for backward compatibility but delegates to the new implementation.
-func matchesPattern(path, pattern string) bool {
-	return MatchesPattern(path, pattern)
-}
-
 // isCompressibleContentType checks if a content type should be compressed
 func isCompressibleContentType(contentType string) bool {
 	compressibleTypes := []string{

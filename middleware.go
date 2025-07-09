@@ -496,7 +496,7 @@ func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string)
 		if len(patterns) > 0 {
 			matched := false
 			for _, pattern := range patterns {
-				if matchesPattern(req.Path, pattern) {
+				if MatchesPattern(req.Path, pattern) {
 					matched = true
 					break
 				}
