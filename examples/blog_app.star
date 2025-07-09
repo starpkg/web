@@ -9,7 +9,7 @@ def main():
     srv.use(cors_middleware())
     srv.use(compression_middleware())
     
-    # Create authentication for admin
+    # Create authentication for admin - this will be applied only to admin routes
     auth = basic_auth(users={"admin": "blogpass"}, realm="Blog Admin")
     
     # In-memory data store
@@ -38,7 +38,7 @@ def main():
     def format_date(date_str):
         return date_str.split("T")[0]
     
-    # Routes
+    # PUBLIC ROUTES (no authentication required)
     def home(req):
         posts_html = ""
         for post in posts:
@@ -88,11 +88,17 @@ def main():
                     <a href="/">Home</a>
                     <a href="/admin/new">New Post</a>
                     <a href="/admin/list">Admin</a>
+                    <a href="/api/posts">API</a>
                 </div>
             </div>
             
             <div class="content">
                 {}
+            </div>
+            
+            <div style="margin-top: 40px; padding-top: 20px; border-top: 1px solid #ccc; color: #666;">
+                <p><strong>Admin Access:</strong> Use credentials admin/blogpass to access admin areas.</p>
+                <p><strong>Public API:</strong> <a href="/api/posts">GET /api/posts</a> | Protected: POST /api/posts (requires auth)</p>
             </div>
         </body>
         </html>
@@ -129,6 +135,7 @@ def main():
                     <a href="/">Home</a>
                     <a href="/admin/new">New Post</a>
                     <a href="/admin/list">Admin</a>
+                    <a href="/api/posts">API</a>
                 </div>
             </div>
             
@@ -148,7 +155,13 @@ def main():
             post["content"]
         ))
     
+    # PUBLIC API ENDPOINT (list posts - no auth required)
+    def api_posts_public(req):
+        return json_response({"posts": posts})
+    
+    # ADMIN ROUTES (protected by middleware - no manual auth checks needed)
     def new_post_form(req):
+        # This route is protected by auth.middleware(), so user is already authenticated
         return html_response("""
         <!DOCTYPE html>
         <html>
@@ -174,6 +187,7 @@ def main():
                     <a href="/">Home</a>
                     <a href="/admin/new">New Post</a>
                     <a href="/admin/list">Admin</a>
+                    <a href="/api/posts">API</a>
                 </div>
             </div>
             
@@ -194,11 +208,9 @@ def main():
         """)
     
     def create_post(req):
+        # This route is protected by auth.middleware(), so we can get auth info directly
         basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
-        username = basic_info[0]
+        username = basic_info[0] if basic_info != None else "admin"
         
         form_data = req.form()
         if form_data == None:
@@ -226,10 +238,7 @@ def main():
         return redirect("/")
     
     def admin_list(req):
-        basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
+        # This route is protected by auth.middleware()
         posts_html = ""
         for post in posts:
             posts_html = posts_html + """
@@ -277,6 +286,7 @@ def main():
                     <a href="/">Home</a>
                     <a href="/admin/new">New Post</a>
                     <a href="/admin/list">Admin</a>
+                    <a href="/api/posts">API</a>
                 </div>
             </div>
             
@@ -300,10 +310,7 @@ def main():
         """.format(posts_html))
     
     def edit_post_form(req):
-        basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
+        # This route is protected by auth.middleware()
         post_id_str = req.param("id")
         post_id = int(post_id_str) if post_id_str else 0
         
@@ -336,6 +343,7 @@ def main():
                     <a href="/">Home</a>
                     <a href="/admin/new">New Post</a>
                     <a href="/admin/list">Admin</a>
+                    <a href="/api/posts">API</a>
                 </div>
             </div>
             
@@ -356,10 +364,7 @@ def main():
         """.format(post["id"], post["title"], post["content"]))
     
     def update_post(req):
-        basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
+        # This route is protected by auth.middleware()
         post_id_str = req.param("id")
         post_id = int(post_id_str) if post_id_str else 0
         
@@ -384,10 +389,7 @@ def main():
         return redirect("/admin/list")
     
     def delete_post(req):
-        basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
+        # This route is protected by auth.middleware()
         post_id_str = req.param("id")
         post_id = int(post_id_str) if post_id_str else 0
         
@@ -398,45 +400,39 @@ def main():
         
         return error_response(404, "Post not found")
     
-    # API endpoints
-    def api_posts(req):
-        if req.method == "GET":
-            return json_response({"posts": posts})
-        elif req.method == "POST":
-            basic_info = req.basic_auth()
-            if basic_info == None:
-                return error_response(401, "Authentication required")
-            
-            username = basic_info[0]
-            
-            data = req.json()
-            if data == None:
-                return error_response(400, "JSON data required")
-            
-            title = data.get("title")
-            content = data.get("content")
-            
-            if title == None or content == None:
-                return error_response(400, "Title and content are required")
-            
-            current_time = now().format("2006-01-02T15:04:05Z")
-            post = {
-                "id": next_id[0],
-                "title": title,
-                "content": content,
-                "author": username,
-                "created": current_time,
-                "updated": current_time
-            }
-            
-            posts.append(post)
-            next_id[0] = next_id[0] + 1
-            
-            return json_response(post, status=201)
-        else:
-            return error_response(405, "Method not allowed")
+    # PROTECTED API ENDPOINTS (require authentication for POST, not for GET)
+    def api_create_post(req):
+        # This route is protected by auth.middleware()
+        basic_info = req.basic_auth()
+        username = basic_info[0] if basic_info != None else "admin"
+        
+        data = req.json()
+        if data == None:
+            return error_response(400, "JSON data required")
+        
+        title = data.get("title")
+        content = data.get("content")
+        
+        if title == None or content == None:
+            return error_response(400, "Title and content are required")
+        
+        current_time = now().format("2006-01-02T15:04:05Z")
+        post = {
+            "id": next_id[0],
+            "title": title,
+            "content": content,
+            "author": username,
+            "created": current_time,
+            "updated": current_time
+        }
+        
+        posts.append(post)
+        next_id[0] = next_id[0] + 1
+        
+        return json_response(post, status=201)
     
-    def api_post(req):
+    def api_get_post(req):
+        # This is public - no auth required
         post_id_str = req.param("id")
         post_id = int(post_id_str) if post_id_str else 0
         
@@ -446,11 +442,13 @@ def main():
         
         return json_response(post)
     
-    # Register public routes
+    # REGISTER PUBLIC ROUTES (no authentication)
     srv.get("/", home)
     srv.get("/post/{id}", view_post)
+    srv.get("/api/posts", api_posts_public)
+    srv.get("/api/posts/{id}", api_get_post)
     
-    # Register admin routes with authentication
+    # REGISTER PROTECTED ADMIN ROUTES (with authentication middleware)
     srv.use_for("/admin/*", auth.middleware())
     srv.get("/admin/new", new_post_form)
     srv.post("/admin/create", create_post)
@@ -459,17 +457,24 @@ def main():
     srv.post("/admin/update/{id}", update_post)
     srv.get("/admin/delete/{id}", delete_post)
     
-    # Register API routes with authentication
-    srv.use_for("/api/*", auth.middleware())
-    srv.route(["GET", "POST"], "/api/posts", api_posts)
-    srv.get("/api/posts/{id}", api_post)
+    # REGISTER PROTECTED API ROUTES (with authentication middleware)
+    srv.use_for("/api/admin/*", auth.middleware())
+    srv.post("/api/admin/posts", api_create_post)
     
     print("Blog server running on http://localhost:8080")
     print("Admin credentials: admin/blogpass")
-    print("API endpoints:")
-    print("  GET /api/posts - List all posts")
-    print("  POST /api/posts - Create new post")
-    print("  GET /api/posts/{id} - Get specific post")
+    print("")
+    print("Public endpoints:")
+    print("  GET / - Home page")
+    print("  GET /post/{id} - View post")
+    print("  GET /api/posts - List all posts (public)")
+    print("  GET /api/posts/{id} - Get post by ID (public)")
+    print("")
+    print("Admin endpoints (require admin/blogpass):")
+    print("  GET /admin/new - New post form")
+    print("  GET /admin/list - Admin dashboard")
+    print("  GET /admin/edit/{id} - Edit post form")
+    print("  POST /api/admin/posts - Create post via API")
     
     srv.run()
 

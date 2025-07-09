@@ -1,322 +1,324 @@
-# Authentication Demo
-# This example demonstrates various authentication methods available in the web module
-# Note: Session management is not implemented in this version, so we use in-memory storage
-
-load("web", "create_server", "json_response", "html_response", "error_response", "redirect",
-     "basic_auth", "bearer_auth", "api_key_auth", "cors_middleware", "logging_middleware")
+load("web", "create_server", "html_response", "json_response", "error_response", "redirect", "basic_auth", "cors_middleware", "logging_middleware", "compression_middleware")
 load("time", "now")
 
 def main():
-    srv = create_server(port=8080, server_header="Auth-Demo/1.0")
+    srv = create_server(port=8080, server_header="Auth-Flow-Demo/1.0")
     
     # Add middleware
     srv.use(logging_middleware())
     srv.use(cors_middleware())
+    srv.use(compression_middleware())
     
-    # In-memory user storage and visit tracking
-    users = {
-        "admin": {"password": "secret", "role": "admin", "visits": 0},
-        "user": {"password": "pass", "role": "user", "visits": 0}
-    }
+    # Create authentication for protected areas
+    auth = basic_auth(users={"admin": "secret", "user": "password"}, realm="Demo Area")
     
-    # Valid API keys
-    api_keys = {
-        "key123": {"user": "admin", "app": "web_app"},
-        "key456": {"user": "user", "app": "mobile_app"}
-    }
+    # In-memory storage for demonstration
+    user_visits = {}  # Track user visits
+    login_attempts = {}  # Track login attempts
     
-    # Valid bearer tokens
-    bearer_tokens = {
-        "token123": {"user": "admin", "expires": "2024-12-31T23:59:59Z"},
-        "token456": {"user": "user", "expires": "2024-12-31T23:59:59Z"}
-    }
-    
-    # Create authentication systems
-    basic_auth_obj = basic_auth(users={"admin": "secret", "user": "pass"}, realm="Demo")
-    api_auth = api_key_auth(keys=["key123", "key456"], header="X-API-Key")
-    
-    # Token validation function
-    def validate_token(token):
-        return bearer_tokens.get(token)
-    
-    bearer_auth_obj = bearer_auth(validate_func=validate_token)
-    
-    # Helper function to track visits
+    # Helper to track user visits
     def track_visit(username):
-        if username in users:
-            users[username]["visits"] = users[username]["visits"] + 1
+        if username not in user_visits:
+            user_visits[username] = []
+        user_visits[username].append(now().format("2006-01-02T15:04:05Z"))
     
-    # Routes
+    # Helper to get user visit history
+    def get_visit_history(username):
+        return user_visits.get(username, [])
+    
+    # PUBLIC ROUTES
     def home(req):
         return html_response("""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Authentication Demo</title>
+            <title>Authentication Flow Demo</title>
             <style>
                 body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .section { margin-bottom: 30px; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
-                .auth-method { background: #f8f9fa; padding: 15px; margin: 10px 0; border-radius: 5px; }
-                .credentials { background: #e9ecef; padding: 10px; margin: 10px 0; border-radius: 3px; }
-                .endpoint { margin: 5px 0; }
-                .method { font-weight: bold; color: #007bff; }
-                pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
+                .section { margin: 20px 0; padding: 20px; border: 1px solid #ddd; border-radius: 4px; }
                 .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 15px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-            </style>
-        </head>
-        <body>
-            <h1>Authentication Demo</h1>
-            
-            <div class="nav">
-                <a href="/">Home</a>
-                <a href="/login">Login Form</a>
-                <a href="/profile">Profile</a>
-                <a href="/admin">Admin</a>
-            </div>
-            
-            <div class="section">
-                <h2>🔐 Authentication Methods</h2>
-                <p>This demo shows three authentication methods available in the web module:</p>
-                
-                <div class="auth-method">
-                    <h3>1. Basic Authentication</h3>
-                    <p>HTTP Basic Auth with username/password</p>
-                    <div class="credentials">
-                        <strong>Credentials:</strong> admin/secret or user/pass
-                    </div>
-                    <div class="endpoint">
-                        <span class="method">GET</span> /profile - Protected profile page
-                    </div>
-                    <div class="endpoint">
-                        <span class="method">GET</span> /admin - Admin area
-                    </div>
-                </div>
-                
-                <div class="auth-method">
-                    <h3>2. Bearer Token Authentication</h3>
-                    <p>JWT-style token authentication</p>
-                    <div class="credentials">
-                        <strong>Tokens:</strong> token123 (admin) or token456 (user)
-                    </div>
-                    <div class="endpoint">
-                        <span class="method">GET</span> /api/profile - API profile endpoint
-                    </div>
-                </div>
-                
-                <div class="auth-method">
-                    <h3>3. API Key Authentication</h3>
-                    <p>API key-based authentication</p>
-                    <div class="credentials">
-                        <strong>Keys:</strong> key123 (admin) or key456 (user)
-                    </div>
-                    <div class="endpoint">
-                        <span class="method">GET</span> /api/data - API data endpoint
-                    </div>
-                </div>
-            </div>
-            
-            <div class="section">
-                <h2>🧪 Test Commands</h2>
-                <pre>
-# Basic Authentication
-curl -u admin:secret http://localhost:8080/profile
-curl -u user:pass http://localhost:8080/profile
-
-# Bearer Token Authentication
-curl -H "Authorization: Bearer token123" http://localhost:8080/api/profile
-curl -H "Authorization: Bearer token456" http://localhost:8080/api/profile
-
-# API Key Authentication
-curl -H "X-API-Key: key123" http://localhost:8080/api/data
-curl -H "X-API-Key: key456" http://localhost:8080/api/data
-
-# Test unauthorized access
-curl http://localhost:8080/profile
-curl http://localhost:8080/api/profile
-curl http://localhost:8080/api/data
-                </pre>
-            </div>
-            
-            <div class="section">
-                <h2>📊 User Statistics</h2>
-                <div id="stats">
-                    <p>Admin visits: {}</p>
-                    <p>User visits: {}</p>
-                </div>
-            </div>
-        </body>
-        </html>
-        """.format(users["admin"]["visits"], users["user"]["visits"]))
-    
-    def login_form(req):
-        return html_response("""
-        <!DOCTYPE html>
-        <html>
-        <head>
-            <title>Login - Auth Demo</title>
-            <style>
-                body { font-family: Arial, sans-serif; max-width: 400px; margin: 50px auto; padding: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; padding: 5px 10px; }
+                .nav a:hover { background: #f0f0f0; text-decoration: underline; }
+                .login-form { background: #f8f9fa; padding: 20px; border-radius: 4px; margin: 20px 0; }
                 .form-group { margin-bottom: 15px; }
                 .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
                 .form-group input { width: 100%; padding: 8px; border: 1px solid #ccc; border-radius: 4px; }
                 .btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 4px; cursor: pointer; }
                 .btn:hover { background: #0056b3; }
-                .credentials { background: #e9ecef; padding: 15px; margin: 20px 0; border-radius: 4px; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 15px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
+                .status { padding: 10px; margin: 10px 0; border-radius: 4px; }
+                .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+                .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+                .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
             </style>
         </head>
         <body>
+            <h1>Authentication Flow Demo</h1>
+            
             <div class="nav">
                 <a href="/">Home</a>
-                <a href="/login">Login Form</a>
-                <a href="/profile">Profile</a>
-                <a href="/admin">Admin</a>
+                <a href="/login">Login Demo</a>
+                <a href="/protected">Protected Area</a>
+                <a href="/user-profile">User Profile</a>
+                <a href="/admin-only">Admin Only</a>
+                <a href="/api/status">API Status</a>
             </div>
             
-            <h2>Login Form</h2>
-            <p>This is a demonstration login form. In a real application, you would process these credentials.</p>
-            
-            <form method="POST" action="/login">
-                <div class="form-group">
-                    <label for="username">Username:</label>
-                    <input type="text" id="username" name="username" required>
-                </div>
-                <div class="form-group">
-                    <label for="password">Password:</label>
-                    <input type="password" id="password" name="password" required>
-                </div>
-                <button type="submit" class="btn">Login</button>
-            </form>
-            
-            <div class="credentials">
-                <h3>Test Credentials:</h3>
-                <p><strong>Admin:</strong> admin / secret</p>
-                <p><strong>User:</strong> user / pass</p>
+            <div class="section">
+                <h2>Authentication System</h2>
+                <p>This demo shows a complete authentication flow using Basic Authentication with:</p>
+                <ul>
+                    <li><strong>User Management:</strong> Multiple users with different roles</li>
+                    <li><strong>Protected Routes:</strong> Routes that require authentication</li>
+                    <li><strong>Visit Tracking:</strong> Track user access patterns</li>
+                    <li><strong>Role-based Access:</strong> Different access levels for different users</li>
+                </ul>
             </div>
             
-            <p><em>Note: This demo uses Basic Auth for actual authentication. The form is for demonstration purposes only.</em></p>
+            <div class="section">
+                <h2>Available Users</h2>
+                <div class="info">
+                    <p><strong>Admin User:</strong> admin / secret</p>
+                    <p><strong>Regular User:</strong> user / password</p>
+                </div>
+            </div>
+            
+            <div class="section">
+                <h2>Test the Authentication</h2>
+                <p>Try accessing the protected areas below:</p>
+                <ul>
+                    <li><a href="/protected">Protected Area</a> - Requires any valid user</li>
+                    <li><a href="/user-profile">User Profile</a> - Shows user-specific information</li>
+                    <li><a href="/admin-only">Admin Only</a> - Requires admin privileges</li>
+                    <li><a href="/api/protected">Protected API</a> - API endpoint requiring auth</li>
+                </ul>
+            </div>
+            
+            <div class="section">
+                <h2>Manual Login Test</h2>
+                <div class="login-form">
+                    <p>Use your browser's authentication dialog when accessing protected routes, or test with curl:</p>
+                    <pre>curl -u admin:secret http://localhost:8080/protected</pre>
+                    <pre>curl -u user:password http://localhost:8080/user-profile</pre>
+                </div>
+            </div>
         </body>
         </html>
         """)
     
-    def process_login(req):
-        form_data = req.form()
-        if form_data == None:
-            return error_response(400, "Form data required")
-        
-        username = form_data.get("username")
-        password = form_data.get("password")
-        
-        if username == None or password == None:
-            return error_response(400, "Username and password required")
-        
-        # Validate credentials
-        if username in users and users[username]["password"] == password:
-            # In a real app, you would create a session or token here
-            track_visit(username)
-            return html_response("""
-            <!DOCTYPE html>
-            <html>
-            <head>
-                <title>Login Success</title>
-                <style>
-                    body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; text-align: center; }
-                    .success { background: #d4edda; padding: 20px; border-radius: 5px; margin: 20px 0; }
-                    .nav { margin-bottom: 20px; }
-                    .nav a { margin-right: 15px; color: #007bff; text-decoration: none; }
-                    .nav a:hover { text-decoration: underline; }
-                </style>
-            </head>
-            <body>
-                <div class="nav">
-                    <a href="/">Home</a>
-                    <a href="/login">Login Form</a>
-                    <a href="/profile">Profile</a>
-                    <a href="/admin">Admin</a>
-                </div>
-                
-                <div class="success">
-                    <h2>Login Successful!</h2>
-                    <p>Welcome, <strong>{}</strong>! You have successfully logged in.</p>
-                    <p>Role: {}</p>
-                    <p>Total visits: {}</p>
-                </div>
-                
-                <p><em>Note: To access protected endpoints, use Basic Auth with your credentials.</em></p>
-                <p><a href="/profile">Try accessing your profile</a></p>
-            </body>
-            </html>
-            """.format(username, users[username]["role"], users[username]["visits"]))
-        else:
-            return error_response(401, "Invalid credentials")
-    
-    def profile(req):
-        basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
-        
-        username = basic_info[0]
-        track_visit(username)
-        
-        user_info = users.get(username, {})
-        
+    def login_demo(req):
         return html_response("""
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Profile - Auth Demo</title>
+            <title>Login Demo</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 600px; margin: 50px auto; padding: 20px; }
-                .profile { background: #f8f9fa; padding: 20px; border-radius: 5px; margin: 20px 0; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 15px; color: #007bff; text-decoration: none; }
+                body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .info { background: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 4px; margin: 20px 0; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
                 .nav a:hover { text-decoration: underline; }
-                .info { margin: 10px 0; }
+                pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
             </style>
         </head>
         <body>
             <div class="nav">
                 <a href="/">Home</a>
-                <a href="/login">Login Form</a>
-                <a href="/profile">Profile</a>
-                <a href="/admin">Admin</a>
+                <a href="/login">Login Demo</a>
+                <a href="/protected">Protected Area</a>
             </div>
             
-            <h2>User Profile</h2>
+            <h1>Login Demo</h1>
+            
+            <div class="info">
+                <p>This application uses <strong>HTTP Basic Authentication</strong>. When you access a protected route, your browser will show a login dialog.</p>
+            </div>
+            
+            <h2>Test Authentication</h2>
+            <p>Click the links below to test authentication:</p>
+            
+            <ul>
+                <li><a href="/protected">Protected Area</a> - Will prompt for login</li>
+                <li><a href="/user-profile">User Profile</a> - User-specific content</li>
+                <li><a href="/admin-only">Admin Only</a> - Admin-only content</li>
+            </ul>
+            
+            <h2>API Testing</h2>
+            <p>Test with curl commands:</p>
+            <pre>
+# Test without authentication (should fail)
+curl http://localhost:8080/protected
+
+# Test with valid credentials
+curl -u admin:secret http://localhost:8080/protected
+curl -u user:password http://localhost:8080/user-profile
+
+# Test API endpoints
+curl -u admin:secret http://localhost:8080/api/protected
+            </pre>
+        </body>
+        </html>
+        """)
+    
+    def api_status(req):
+        return json_response({
+            "status": "running",
+            "authentication": "basic_auth",
+            "available_users": ["admin", "user"],
+            "protected_routes": [
+                "/protected",
+                "/user-profile", 
+                "/admin-only",
+                "/api/protected"
+            ],
+            "public_routes": [
+                "/",
+                "/login",
+                "/api/status"
+            ],
+            "timestamp": now().format("2006-01-02T15:04:05Z")
+        })
+    
+    # PROTECTED ROUTES
+    def protected_area(req):
+        # This route is protected by auth middleware
+        basic_info = req.basic_auth()
+        username = basic_info[0] if basic_info != None else "unknown"
+        
+        track_visit(username)
+        visit_history = get_visit_history(username)
+        
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Protected Area</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .welcome { background: #d4edda; color: #155724; padding: 15px; border-radius: 4px; margin: 20px 0; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+                .visit-history { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }
+                .visit-history ul { list-style-type: none; padding: 0; }
+                .visit-history li { padding: 5px 0; border-bottom: 1px solid #dee2e6; }
+            </style>
+        </head>
+        <body>
+            <div class="nav">
+                <a href="/">Home</a>
+                <a href="/protected">Protected Area</a>
+                <a href="/user-profile">User Profile</a>
+                <a href="/admin-only">Admin Only</a>
+            </div>
+            
+            <div class="welcome">
+                <h1>Welcome to the Protected Area, {}!</h1>
+                <p>You have successfully authenticated and can access this protected content.</p>
+            </div>
+            
+            <div class="visit-history">
+                <h2>Your Visit History</h2>
+                <p>Recent visits to this protected area:</p>
+                <ul>
+                    {}
+                </ul>
+            </div>
+            
+            <div>
+                <h2>Protected Features</h2>
+                <p>This area is only accessible to authenticated users. Here you can:</p>
+                <ul>
+                    <li>View your visit history</li>
+                    <li>Access user-specific content</li>
+                    <li>Perform authenticated actions</li>
+                </ul>
+            </div>
+        </body>
+        </html>
+        """.format(username, "".join(["<li>{}</li>".format(visit) for visit in visit_history[-5:]])))
+    
+    def user_profile(req):
+        # This route is protected by auth middleware
+        basic_info = req.basic_auth()
+        username = basic_info[0] if basic_info != None else "unknown"
+        
+        track_visit(username)
+        visit_history = get_visit_history(username)
+        
+        # Determine user role
+        user_role = "admin" if username == "admin" else "user"
+        
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>User Profile - {}</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .profile { background: #f8f9fa; padding: 20px; border-radius: 4px; margin: 20px 0; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+                .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
+                .stat-card { background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }
+                .stat-value { font-size: 24px; font-weight: bold; color: #007bff; }
+            </style>
+        </head>
+        <body>
+            <div class="nav">
+                <a href="/">Home</a>
+                <a href="/protected">Protected Area</a>
+                <a href="/user-profile">User Profile</a>
+                <a href="/admin-only">Admin Only</a>
+            </div>
             
             <div class="profile">
-                <h3>Welcome, {}!</h3>
-                <div class="info"><strong>Username:</strong> {}</div>
-                <div class="info"><strong>Role:</strong> {}</div>
-                <div class="info"><strong>Total visits:</strong> {}</div>
-                <div class="info"><strong>Last access:</strong> {}</div>
+                <h1>User Profile</h1>
+                <p><strong>Username:</strong> {}</p>
+                <p><strong>Role:</strong> {}</p>
+                <p><strong>Status:</strong> Authenticated</p>
+                <p><strong>Last Login:</strong> {}</p>
             </div>
             
-            <p><em>This page is protected by Basic Authentication.</em></p>
+            <div class="stats">
+                <div class="stat-card">
+                    <div class="stat-value">{}</div>
+                    <div>Total Visits</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">{}</div>
+                    <div>Access Level</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-value">{}</div>
+                    <div>Account Type</div>
+                </div>
+            </div>
+            
+            <div>
+                <h2>Recent Activity</h2>
+                <ul>
+                    {}
+                </ul>
+            </div>
         </body>
         </html>
         """.format(
-            username, 
-            username, 
-            user_info.get("role", "unknown"),
-            user_info.get("visits", 0),
-            now().format("2006-01-02 15:04:05")
+            username,
+            username,
+            user_role.upper(),
+            visit_history[-1] if visit_history else "Never",
+            len(visit_history),
+            user_role.upper(),
+            user_role.upper(),
+            "".join(["<li>Visited on {}</li>".format(visit) for visit in visit_history[-5:]])
         ))
     
-    def admin_area(req):
+    def admin_only(req):
+        # This route is protected by auth middleware
         basic_info = req.basic_auth()
-        if basic_info == None:
-            return error_response(401, "Authentication required")
+        username = basic_info[0] if basic_info != None else "unknown"
         
-        username = basic_info[0]
-        user_info = users.get(username, {})
-        
-        if user_info.get("role") != "admin":
-            return error_response(403, "Admin access required")
+        # Check if user is admin
+        if username != "admin":
+            return error_response(403, "Access denied. Admin privileges required.")
         
         track_visit(username)
         
@@ -324,127 +326,118 @@ curl http://localhost:8080/api/data
         <!DOCTYPE html>
         <html>
         <head>
-            <title>Admin Area - Auth Demo</title>
+            <title>Admin Only Area</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 50px auto; padding: 20px; }
-                .admin { background: #fff3cd; padding: 20px; border-radius: 5px; margin: 20px 0; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 15px; color: #007bff; text-decoration: none; }
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .admin-panel { background: #fff3cd; color: #856404; padding: 20px; border-radius: 4px; margin: 20px 0; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
                 .nav a:hover { text-decoration: underline; }
-                .user-list { margin: 20px 0; }
-                .user { background: #f8f9fa; padding: 10px; margin: 5px 0; border-radius: 3px; }
+                .admin-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }
+                .action-card { background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }
+                .users-list { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }
             </style>
         </head>
         <body>
             <div class="nav">
                 <a href="/">Home</a>
-                <a href="/login">Login Form</a>
-                <a href="/profile">Profile</a>
-                <a href="/admin">Admin</a>
+                <a href="/protected">Protected Area</a>
+                <a href="/user-profile">User Profile</a>
+                <a href="/admin-only">Admin Only</a>
             </div>
             
-            <div class="admin">
-                <h2>Admin Area</h2>
-                <p>Welcome, Administrator <strong>{}</strong>!</p>
-                <p>This area is restricted to admin users only.</p>
-                
-                <div class="user-list">
-                    <h3>User Statistics:</h3>
-                    <div class="user">
-                        <strong>Admin:</strong> Role: admin, Visits: {}
-                    </div>
-                    <div class="user">
-                        <strong>User:</strong> Role: user, Visits: {}
-                    </div>
+            <div class="admin-panel">
+                <h1>Admin Dashboard</h1>
+                <p>Welcome, {}! This area is restricted to administrators only.</p>
+            </div>
+            
+            <div class="admin-actions">
+                <div class="action-card">
+                    <h3>User Management</h3>
+                    <p>Manage user accounts and permissions</p>
                 </div>
+                <div class="action-card">
+                    <h3>System Settings</h3>
+                    <p>Configure system-wide settings</p>
+                </div>
+                <div class="action-card">
+                    <h3>Security Logs</h3>
+                    <p>View authentication and access logs</p>
+                </div>
+                <div class="action-card">
+                    <h3>Analytics</h3>
+                    <p>View usage statistics and reports</p>
+                </div>
+            </div>
+            
+            <div class="users-list">
+                <h2>User Activity Summary</h2>
+                <ul>
+                    {}
+                </ul>
             </div>
         </body>
         </html>
-        """.format(username, users["admin"]["visits"], users["user"]["visits"]))
+        """.format(
+            username,
+            "".join(["<li><strong>{}:</strong> {} visits</li>".format(user, len(visits)) for user, visits in user_visits.items()])
+        ))
     
-    def api_profile(req):
-        token = req.bearer_token()
-        if token == None:
-            return error_response(401, "Bearer token required")
+    def protected_api(req):
+        # This route is protected by auth middleware
+        basic_info = req.basic_auth()
+        username = basic_info[0] if basic_info != None else "unknown"
         
-        token_info = validate_token(token)
-        if token_info == None:
-            return error_response(401, "Invalid token")
-        
-        username = token_info["user"]
         track_visit(username)
-        user_info = users.get(username, {})
         
         return json_response({
-            "username": username,
-            "role": user_info.get("role", "unknown"),
-            "visits": user_info.get("visits", 0),
-            "token_expires": token_info.get("expires"),
+            "message": "Protected API endpoint accessed successfully",
+            "authenticated_user": username,
+            "user_role": "admin" if username == "admin" else "user",
+            "visit_count": len(get_visit_history(username)),
             "timestamp": now().format("2006-01-02T15:04:05Z")
         })
     
-    def api_data(req):
-        api_key = req.get_header("X-API-Key")
-        if api_key == None:
-            return error_response(401, "API key required")
-        
-        key_info = api_keys.get(api_key)
-        if key_info == None:
-            return error_response(401, "Invalid API key")
-        
-        username = key_info["user"]
-        track_visit(username)
-        user_info = users.get(username, {})
-        
-        return json_response({
-            "message": "API data access granted",
-            "user": username,
-            "app": key_info.get("app"),
-            "role": user_info.get("role", "unknown"),
-            "visits": user_info.get("visits", 0),
-            "data": {
-                "items": ["item1", "item2", "item3"],
-                "count": 3
-            },
-            "timestamp": now().format("2006-01-02T15:04:05Z")
-        })
-    
-    # Register public routes
+    # REGISTER PUBLIC ROUTES
     srv.get("/", home)
-    srv.get("/login", login_form)
-    srv.post("/login", process_login)
+    srv.get("/login", login_demo)
+    srv.get("/api/status", api_status)
     
-    # Register protected routes with Basic Auth
-    srv.use_for("/profile", basic_auth_obj.middleware())
-    srv.use_for("/admin", basic_auth_obj.middleware())
-    srv.get("/profile", profile)
-    srv.get("/admin", admin_area)
+    # REGISTER PROTECTED ROUTES (with authentication middleware)
+    srv.use_for("/protected", auth.middleware())
+    srv.get("/protected", protected_area)
     
-    # Register API routes with token auth
-    srv.use_for("/api/profile", bearer_auth_obj.middleware())
-    srv.get("/api/profile", api_profile)
+    srv.use_for("/user-profile", auth.middleware())
+    srv.get("/user-profile", user_profile)
     
-    # Register API routes with key auth
-    srv.use_for("/api/data", api_auth.middleware())
-    srv.get("/api/data", api_data)
+    srv.use_for("/admin-only", auth.middleware())
+    srv.get("/admin-only", admin_only)
     
-    print("Authentication Demo running on http://localhost:8080")
+    srv.use_for("/api/protected", auth.middleware())
+    srv.get("/api/protected", protected_api)
+    
+    print("Authentication Flow Demo server running on http://localhost:8080")
     print("")
-    print("Authentication methods:")
-    print("  1. Basic Auth: admin/secret or user/pass")
-    print("  2. Bearer Token: token123 (admin) or token456 (user)")
-    print("  3. API Key: key123 (admin) or key456 (user)")
-    print("")
-    print("Protected endpoints:")
-    print("  - GET /profile (Basic Auth)")
-    print("  - GET /admin (Basic Auth + admin role)")
-    print("  - GET /api/profile (Bearer Token)")
-    print("  - GET /api/data (API Key)")
+    print("Available users:")
+    print("  admin / secret - Full admin access")
+    print("  user / password - Regular user access")
     print("")
     print("Public endpoints:")
-    print("  - GET / (home page)")
-    print("  - GET /login (login form)")
-    print("  - POST /login (process login)")
+    print("  GET / - Home page")
+    print("  GET /login - Login demo page")
+    print("  GET /api/status - API status (public)")
+    print("")
+    print("Protected endpoints (require authentication):")
+    print("  GET /protected - Protected area (any user)")
+    print("  GET /user-profile - User profile page (any user)")
+    print("  GET /admin-only - Admin dashboard (admin only)")
+    print("  GET /api/protected - Protected API (any user)")
+    print("")
+    print("Features demonstrated:")
+    print("  - Basic Authentication with multiple users")
+    print("  - Visit tracking and user history")
+    print("  - Role-based access control")
+    print("  - Protected API endpoints")
+    print("  - User-specific content")
     
     srv.run()
 
