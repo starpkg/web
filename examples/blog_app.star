@@ -65,20 +65,20 @@ def main():
         <head>
             <title>My Blog</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
-                .post { margin-bottom: 30px; padding: 20px; border: 1px solid #eee; }
-                .meta { color: #666; font-size: 0.9em; margin-bottom: 10px; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                .form-group { margin-bottom: 15px; }
-                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-                .form-group input, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
-                .btn { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
-                .btn:hover { background: #0056b3; }
-                .error { color: red; margin-bottom: 15px; }
-                .success { color: green; margin-bottom: 15px; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }}
+                .post {{ margin-bottom: 30px; padding: 20px; border: 1px solid #eee; }}
+                .meta {{ color: #666; font-size: 0.9em; margin-bottom: 10px; }}
+                .nav {{ margin-bottom: 20px; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                .form-group {{ margin-bottom: 15px; }}
+                .form-group label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
+                .form-group input, .form-group textarea {{ width: 100%; padding: 8px; border: 1px solid #ccc; }}
+                .btn {{ padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }}
+                .btn:hover {{ background: #0056b3; }}
+                .error {{ color: red; margin-bottom: 15px; }}
+                .success {{ color: green; margin-bottom: 15px; }}
             </style>
         </head>
         <body>
