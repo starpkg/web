@@ -210,9 +210,10 @@ func max(a, b int) int {
 }
 
 // matchesPattern checks if a path matches a glob-like pattern
+// This function is deprecated in favor of the unified PathMatcher.
+// It's kept for backward compatibility but delegates to the new implementation.
 func matchesPattern(path, pattern string) bool {
-	// Simple pattern matching - could be enhanced with full glob support
-	return strings.Contains(path, strings.TrimSuffix(pattern, "*"))
+	return MatchesPattern(path, pattern)
 }
 
 // isCompressibleContentType checks if a content type should be compressed

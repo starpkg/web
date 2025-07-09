@@ -20,6 +20,20 @@ var (
 	_ starlark.HasAttrs = (*ServerWrapper)(nil)
 )
 
+// Middleware represents middleware with a specific path pattern.
+// All middleware in the system has an associated path pattern.
+// Global middleware uses the pattern "/*" to match all paths.
+type Middleware struct {
+	Pattern string
+	Handler MiddlewareFunc
+}
+
+// MatchesPath checks if the given path matches the middleware pattern.
+// Uses the unified PathMatcher for consistent path matching behavior.
+func (m *Middleware) MatchesPath(path string) bool {
+	return MatchesPattern(path, m.Pattern)
+}
+
 // Server represents an HTTP server instance
 type Server struct {
 	host               string
@@ -32,7 +46,7 @@ type Server struct {
 	writeTimeout       time.Duration
 	maxBodySize        int64
 	serverHeader       string
-	middleware         []*MiddlewareWrapper
+	middleware         []*Middleware // All middleware with path patterns
 	errorHandlers      *ErrorHandlerRegistry
 	ginMiddlewareAdded bool         // Flag to prevent multiple Gin middleware additions
 	mu                 sync.RWMutex // Protects running, httpServer fields
@@ -82,7 +96,7 @@ func newServer(module *Module, host string, port int) *Server {
 		writeTimeout:       writeTimeout,
 		maxBodySize:        maxBodySize,
 		serverHeader:       serverHeader,
-		middleware:         make([]*MiddlewareWrapper, 0),
+		middleware:         make([]*Middleware, 0),
 		errorHandlers:      NewErrorHandlerRegistry(),
 		ginMiddlewareAdded: false,
 	}
@@ -180,9 +194,12 @@ func (s *Server) applyMiddlewareToGin() {
 				next := dummyHandler
 				for i := len(s.middleware) - 1; i >= 0; i-- {
 					middleware := s.middleware[i]
-					currentNext := next
-					next = func(req *Request) *Response {
-						return middleware.Execute(req, currentNext)
+					// Only apply middleware that matches the path
+					if middleware.MatchesPath(req.Path) {
+						currentNext := next
+						next = func(req *Request) *Response {
+							return middleware.Handler(req, currentNext)
+						}
 					}
 				}
 				response = next(req)
@@ -320,14 +337,23 @@ func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 
 		// Execute middleware chain
 		var response *Response
-		if len(s.middleware) > 0 {
+
+		// Collect applicable middleware that matches the request path
+		var applicableMiddleware []*Middleware
+		for _, mw := range s.middleware {
+			if mw.MatchesPath(req.Path) {
+				applicableMiddleware = append(applicableMiddleware, mw)
+			}
+		}
+
+		if len(applicableMiddleware) > 0 {
 			// Build middleware chain
 			next := finalHandler
-			for i := len(s.middleware) - 1; i >= 0; i-- {
-				mw := s.middleware[i]
+			for i := len(applicableMiddleware) - 1; i >= 0; i-- {
+				mw := applicableMiddleware[i]
 				currentNext := next
 				next = func(req *Request) *Response {
-					return mw.Execute(req, currentNext)
+					return mw.Handler(req, currentNext)
 				}
 			}
 			response = next(req)
@@ -665,30 +691,13 @@ func (sw *ServerWrapper) group(thread *starlark.Thread, b *starlark.Builtin, arg
 }
 
 // use handles the use() method call for adding global middleware.
+// Global middleware uses the pattern "/*" to match all paths.
 func (sw *ServerWrapper) use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var middleware starlark.Value
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "middleware", &middleware); err != nil {
-		return starlark.None, err
-	}
-
-	if mw, ok := middleware.(*MiddlewareWrapper); ok {
-		sw.server.middleware = append(sw.server.middleware, mw)
-	} else if callable, ok := middleware.(starlark.Callable); ok {
-		// Convert Starlark function to middleware
-		starlarkMW := createStarlarkMiddleware(callable)
-		mwWrapper := NewMiddlewareWrapper(starlarkMW)
-		sw.server.middleware = append(sw.server.middleware, mwWrapper)
-	} else {
-		return starlark.None, fmt.Errorf("middleware must be a middleware object or callable")
-	}
-
-	// Apply middleware to Gin engine for OPTIONS requests
-	sw.server.applyMiddlewareToGin()
-
-	return starlark.None, nil
+	// Delegate to use_for with global pattern "/*"
+	return sw.useFor(thread, b, starlark.Tuple{starlark.String("/*"), args[0]}, kwargs)
 }
 
-// useFor handles the use_for() method call for adding path-specific middleware.
+// useFor handles the use_for() method call for adding middleware with specific path patterns.
 func (sw *ServerWrapper) useFor(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var pathPattern string
 	var middleware starlark.Value
@@ -696,9 +705,30 @@ func (sw *ServerWrapper) useFor(thread *starlark.Thread, b *starlark.Builtin, ar
 		return starlark.None, err
 	}
 
-	// TODO: Implement path-specific middleware
-	// For now, just add to global middleware
-	return sw.use(thread, b, starlark.Tuple{middleware}, kwargs)
+	// Convert middleware to MiddlewareFunc
+	var middlewareFunc MiddlewareFunc
+	if mwWrapper, ok := middleware.(*MiddlewareWrapper); ok {
+		middlewareFunc = mwWrapper.middleware
+	} else if callable, ok := middleware.(starlark.Callable); ok {
+		// Convert Starlark function to middleware
+		middlewareFunc = createStarlarkMiddleware(callable)
+	} else {
+		return starlark.None, fmt.Errorf("middleware must be a middleware object or callable")
+	}
+
+	// Create unified middleware with pattern
+	mw := &Middleware{
+		Pattern: pathPattern,
+		Handler: middlewareFunc,
+	}
+
+	// Add to middleware list
+	sw.server.middleware = append(sw.server.middleware, mw)
+
+	// Apply middleware to Gin engine for OPTIONS requests
+	sw.server.applyMiddlewareToGin()
+
+	return starlark.None, nil
 }
 
 // errorHandler handles the error_handler() method call for registering custom error handlers.

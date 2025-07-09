@@ -108,7 +108,7 @@ def main():
     def login_demo(req):
         return html_response("""
         <!DOCTYPE html>
-        <html>
+            <html>
         <head>
             <title>Login Demo</title>
             <style>
@@ -119,7 +119,7 @@ def main():
                 pre { background: #f8f9fa; padding: 10px; border-radius: 4px; overflow-x: auto; }
             </style>
         </head>
-        <body>
+                <body>
             <div class="nav">
                 <a href="/">Home</a>
                 <a href="/login">Login Demo</a>
@@ -154,8 +154,8 @@ curl -u user:password http://localhost:8080/user-profile
 # Test API endpoints
 curl -u admin:secret http://localhost:8080/api/protected
             </pre>
-        </body>
-        </html>
+                </body>
+            </html>
         """)
     
     def api_status(req):
@@ -201,7 +201,7 @@ curl -u admin:secret http://localhost:8080/api/protected
                 .visit-history li { padding: 5px 0; border-bottom: 1px solid #dee2e6; }
             </style>
         </head>
-        <body>
+            <body>
             <div class="nav">
                 <a href="/">Home</a>
                 <a href="/protected">Protected Area</a>
@@ -231,7 +231,7 @@ curl -u admin:secret http://localhost:8080/api/protected
                     <li>Perform authenticated actions</li>
                 </ul>
             </div>
-        </body>
+            </body>
         </html>
         """.format(username, "".join(["<li>{}</li>".format(visit) for visit in visit_history[-5:]])))
     

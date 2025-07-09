@@ -106,9 +106,19 @@ def handle_request(req):
     return json_response({"status": "ok"})
 ```
 
-## Middleware System
+## Unified Middleware System
 
-The web module provides a comprehensive middleware system with built-in middleware functions for common tasks.
+The web module provides a unified middleware system where **all middleware has path patterns**. This provides consistent behavior and powerful routing capabilities.
+
+### Key Concepts
+
+- **Global middleware** uses the pattern `"/*"` to match all paths
+- **Path-specific middleware** uses patterns like `"/api/*"` or `"/admin/*"`
+- **Exact path middleware** uses patterns like `"/api/upload"`
+- **Complex patterns** support wildcards like `"/files/*/download"`
+- **Parameter patterns** support Flask-style parameters like `"/users/{id}"`
+
+The `use()` method is simply shorthand for `use_for("/*", middleware)` - both approaches are equivalent.
 
 ### Core Middleware Functions
 
@@ -355,21 +365,28 @@ srv.use(caching_middleware(
 - `must_revalidate` (bool): Set must-revalidate directive (default: False)
 - `etag_func` (function): Function to generate ETag values
 
-#### 10. Path-Based Middleware
+#### 10. Unified Middleware Application
 
-Apply middleware to specific paths or patterns.
+Apply middleware using path patterns. All middleware functions in the unified system require a path pattern.
 
 ```python
-# Apply middleware to specific paths
-srv.use_for("/api/*", rate_limiting_middleware(requests_per_minute=100))
+# Global middleware (applies to all routes using "/*" pattern)
+srv.use(logging_middleware())  # Equivalent to srv.use_for("/*", logging_middleware())
+srv.use(cors_middleware())
+
+# Path-specific middleware
+srv.use_for("/api/*", rate_limit_middleware())
 srv.use_for("/admin/*", security_headers_middleware())
 
-# Apply multiple middleware to a path
-srv.use_for("/uploads/*", [
-    request_size_middleware(max_body_size=52428800),  # 50MB
-    timing_middleware(),
-    logging_middleware()
-])
+# Exact path middleware
+srv.use_for("/api/upload", request_size_middleware())
+
+# Complex wildcard patterns
+srv.use_for("/files/*/download", security_headers_middleware())
+
+# Parameter patterns
+srv.use_for("/users/{id}", timing_middleware())
+srv.use_for("/users/{id}/posts/{post_id}", compression_middleware())
 ```
 
 ### Custom Middleware
@@ -582,19 +599,15 @@ srv.use_for("/static/*", [
 
 ## Complete Example
 
-Here's a complete example demonstrating various features:
+Here's a complete example demonstrating the unified middleware system:
 
 ```python
 load("web", "create_server", "html_response", "json_response", "error_response", 
-     "basic_auth", "cors_middleware", "logging_middleware", "compression_middleware")
+     "basic_auth", "cors_middleware", "logging_middleware", "compression_middleware", 
+     "security_headers_middleware")
 
 def main():
     srv = create_server(port=8080, server_header="MyApp/1.0")
-    
-    # Global middleware
-    srv.use(logging_middleware())
-    srv.use(cors_middleware())
-    srv.use(compression_middleware())
     
     # Authentication
     auth = basic_auth(users={"admin": "secret"}, realm="Admin")
@@ -605,10 +618,11 @@ def main():
         <!DOCTYPE html>
         <html>
         <head><title>My App</title></head>
-        <body>
+            <body>
             <h1>Welcome!</h1>
+            <p><a href="/api/status">API Status</a></p>
             <p><a href="/admin">Admin Area</a></p>
-        </body>
+            </body>
         </html>
         """)
     
@@ -623,15 +637,34 @@ def main():
     # Register routes
     srv.get("/", home)
     srv.get("/api/status", api_status)
-    
-    # Protected routes
-    srv.use_for("/admin", auth.middleware())
     srv.get("/admin", admin_area)
+    
+    # ========================================
+    # UNIFIED MIDDLEWARE SYSTEM
+    # ========================================
+    # All middleware now has path patterns
+    
+    # Global middleware (applies to all routes using "/*" pattern)
+    srv.use(logging_middleware())  # Same as srv.use_for("/*", logging_middleware())
+    srv.use(cors_middleware())
+    
+    # API-specific middleware (applies only to /api/* routes)
+    srv.use_for("/api/*", compression_middleware())
+    srv.use_for("/api/*", security_headers_middleware())
+    
+    # Admin-specific middleware (applies only to /admin/* routes)
+    srv.use_for("/admin/*", auth.middleware())  # Authentication required
+    srv.use_for("/admin/*", security_headers_middleware())
     
     # Static files
     srv.static("/static", "./public")
     
     print("Server running on http://localhost:8080")
+    print("Features demonstrated:")
+    print("- Global middleware using /* pattern")
+    print("- Path-specific middleware for API and admin routes")
+    print("- Authentication protection for admin area")
+    print("- Multiple middleware layers combining correctly")
     srv.run()
 
 main()
