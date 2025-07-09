@@ -49,21 +49,6 @@ create_server(host="localhost", port=8080, **config) -> Server
 - `**config`: Additional configuration options (see Configuration section)  
 **Returns**: Server object that can be used to register routes and start the server
 
-#### Session Management
-
-```python
-create_session_manager(secret, cookie_name="session", max_age=86400, **options) -> SessionManager
-```
-
-**Purpose**: Creates a session manager for handling user sessions across requests.  
-**Parameters**:
-
-- `secret` (string): Secret key for session encryption (required)
-- `cookie_name` (string): Name of the session cookie (default: "session")
-- `max_age` (int): Session lifetime in seconds (default: 86400/24 hours)
-- `**options`: Additional session configuration  
-**Returns**: SessionManager object for handling sessions
-
 #### Response Builders
 
 ```python
@@ -261,7 +246,7 @@ server.group(prefix) -> RouteGroup
 
 # Static file serving
 server.static(url_path, directory, index="index.html")
-server.spa(url_path, directory, fallback="index.html")
+server.static(url_path, directory)  # Static file serving only
 
 # Middleware (redesigned for flexibility)
 server.use(middleware_func)                             # Global middleware
@@ -302,31 +287,6 @@ request.param(name)     # Get path parameter
 request.get_header(name, default=None)
 request.bearer_token()  # Extract Bearer token
 request.basic_auth()    # Get (username, password) tuple
-```
-
-### SessionManager Object API
-
-```python
-# Main method
-session_manager.get_session(request) -> Session         # Get session for request
-
-# Session configuration
-session_manager.configure(cookie_name, max_age, secure, http_only)
-```
-
-### Session Object (Returned by session_manager.get_session)
-
-```python
-# Properties
-session.id              # Session ID
-session.is_new          # New session flag
-
-# Methods
-session.get(key, default=None)
-session.set(key, value)
-session.delete(key)
-session.clear()
-session.save()          # Explicitly save session (automatic in most cases)
 ```
 
 ### Response Object
@@ -716,33 +676,7 @@ def error_handling_middleware(request, next_handler):
         return error_response(500, "Internal server error")
 ```
 
-#### Session Middleware
 
-```python
-def session_middleware(session_manager):
-    """Create middleware that provides session access."""
-    
-    def middleware(request, next_handler):
-        # Get session for this request
-        session = session_manager.get_session(request)
-        
-        # Make session available in request context
-        request.context["session"] = session
-        
-        # Process request
-        response = next_handler(request)
-        
-        # Save session changes
-        session.save()
-        
-        return response
-    
-    return middleware
-
-# Usage
-session_mgr = create_session_manager(secret="my-secret")
-srv.use(session_middleware(session_mgr))
-```
 
 ### Middleware Best Practices
 
@@ -1088,8 +1022,8 @@ def main():
     srv.use(cors_middleware(origins=["https://app.example.com"]))
     
     # 5. Authentication (path-specific)
-    srv.use_for("/api/*", jwt_middleware(secret="jwt-secret"))
-    srv.use_for("/admin/*", session_middleware(session_mgr))
+    srv.use_for("/api/*", bearer_auth_middleware())
+    srv.use_for("/admin/*", basic_auth_middleware())
     
     # 6. Error handling (last)
     srv.use(error_middleware(debug=False))
@@ -1201,8 +1135,8 @@ srv.use(form_middleware())
 srv.use(cors_middleware())
 
 # 6. AUTHENTICATION (path-specific)
-srv.use_for("/api/*", jwt_middleware())
-srv.use_for("/admin/*", session_middleware())
+srv.use_for("/api/*", bearer_auth_middleware())
+srv.use_for("/admin/*", basic_auth_middleware())
 
 # 7. BUSINESS LOGIC (routes)
 # Your route handlers here
@@ -1579,8 +1513,8 @@ def main():
     srv.static("/static", "./static")
     srv.static("/uploads", "./uploads")
     
-    # SPA support
-    srv.spa("/app", "./dist", fallback="index.html")
+    # Static file serving
+srv.static("/app", "./dist")
     
     srv.run()
 
@@ -1677,8 +1611,8 @@ main()
 
 For more advanced usage examples, see the separate example files:
 
-- **[examples/blog_app.star](examples/blog_app.star)**: Complete blog application with admin functionality, sessions, and CRUD operations
-- **[examples/session_management.star](examples/session_management.star)**: Session handling, user login/logout, and state management
+- **[examples/blog_app.star](examples/blog_app.star)**: Complete blog application with admin functionality, authentication, and CRUD operations
+- **[examples/session_management.star](examples/session_management.star)**: Authentication methods demonstration with user login/logout using in-memory storage
 - **[examples/middleware_auth.star](examples/middleware_auth.star)**: Advanced middleware patterns and authentication systems
 
 ## Configuration System
@@ -1734,16 +1668,15 @@ web/
 ├── router.go           # Route matching and dispatch
 ├── request.go          # Request wrapper
 ├── response.go         # Response builders
-├── session.go          # Session management
+├── auth.go             # Authentication systems
 ├── middleware.go       # Middleware system
-├── auth.go             # Authentication helpers
 ├── static.go           # Static file serving
 ├── utils.go            # Helper functions
 ├── web_test.go         # Unit tests
 ├── example_test.go     # Integration tests
 ├── examples/           # Example Starlark files
 │   ├── blog_app.star
-│   ├── session_management.star
+│   ├── authentication_demo.star
 │   └── middleware_auth.star
 └── README.md           # User documentation
 ```
@@ -1758,7 +1691,7 @@ type Server struct {
     httpServer     *http.Server
     router         *Router
     middleware     []MiddlewareFunc
-    sessionManager *SessionManager
+    authHandlers map[string]Authenticator
     running        atomic.Bool
     mu             sync.RWMutex
 }
@@ -1820,7 +1753,7 @@ srv.run()
 
 - Path parameter extraction
 - Static file serving with caching
-- SPA support with fallback routing
+- Static file serving
 - File upload handling
 
 #### Success Criteria
@@ -1828,7 +1761,7 @@ srv.run()
 ```python
 srv.get("/users/{id}", get_user_handler)
 srv.static("/static", "./public")
-srv.spa("/app", "./dist")
+srv.static("/app", "./dist")
 ```
 
 ### Phase 3: Middleware & Authentication (Week 3)
@@ -1851,27 +1784,30 @@ srv.use(logging_middleware())
 srv.use(basic_auth({"admin": "password"}).middleware("/admin/*"))
 ```
 
-### Phase 4: Sessions & Security (Week 4)
+### Phase 4: Security Enhancements (Week 4)
 
 **Priority**: High  
 **Effort**: 18-22 hours
 
 #### Deliverables
 
-- Secure session management
-- Cookie handling
+- Enhanced authentication systems
+- Advanced security middleware
 - CSRF protection
 - Security headers middleware
 
 #### Success Criteria
 
 ```python
-session_manager = create_session_manager(secret="key")
-srv = create_server(session_manager=session_manager)
+srv = create_server(port=8080)
+
+# Authentication middleware
+auth = basic_auth({"admin": "password"}, realm="Admin")
+srv.use_for("/admin/*", auth.middleware())
 
 def protected(request):
-    session = session_manager.get_session(request)
-    if session.get("user_id") == None:
+    auth_info = request.basic_auth()
+    if auth_info == None:
         return redirect("/login")
     return response("Protected content")
 
@@ -1903,7 +1839,7 @@ srv.get("/dashboard", protected)
 1. **Unit Tests** (`web_test.go`)
    - Route matching algorithms
    - Request/response parsing
-   - Session management
+   - Authentication systems
    - Middleware execution
 
 2. **Integration Tests** (`example_test.go`)
@@ -1952,7 +1888,7 @@ def handler(req):
 | `try/except` | Use `fail()` or check for `None` |
 | `if x is None` | `if x == None` |
 | `request` global | `request` parameter in handler |
-| `session` global | `session_manager.get_session(request)` |
+| `session` global | Use in-memory storage or authentication |
 
 ## Success Metrics
 

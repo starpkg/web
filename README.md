@@ -13,9 +13,10 @@ Build modern web applications with Flask-like simplicity and Go performance. The
 - **🚀 High Performance**: Built on Gin framework with Go's performance
 - **🐍 Flask-Inspired**: Familiar API patterns adapted for Starlark
 - **🔒 Security First**: Built-in protection against common vulnerabilities
-- **📊 Request/Response**: Complete HTTP request and response handling with full attribute assignment support
-- **🛣️ Flexible Routing**: Support for path parameters and route groups
-- **🔧 Middleware Support**: Comprehensive middleware system with compression, rate limiting, caching, and security headers
+- **📊 Request/Response**: Complete HTTP request and response handling
+- **🛣️ Flexible Routing**: Support for path parameters, route groups, and multiple HTTP methods
+- **🔧 Middleware Support**: Comprehensive middleware system with CORS, logging, compression, rate limiting, and more
+- **🔐 Authentication**: Built-in API key, bearer token, and basic authentication support
 - **📁 Static Files**: Built-in static file serving capabilities
 - **🎯 Error Handling**: Comprehensive error handling and status code management
 - **⚙️ Configurable**: Environment-based configuration with sensible defaults
@@ -32,6 +33,8 @@ web/
 ├── request.go      # Request handling and data extraction
 ├── response.go     # Response handling and data formatting
 ├── router.go       # Routing and middleware functionality
+├── middleware.go   # Built-in middleware implementations
+├── auth.go         # Authentication systems
 ├── utils.go        # Shared utilities and helper functions
 └── README.md       # This documentation
 ```
@@ -95,7 +98,7 @@ srv = create_server()
 srv = create_server(
     host="0.0.0.0",
     port=8080,
-    debug=True
+    server_header="My-Server/1.0"
 )
 ```
 
@@ -119,15 +122,18 @@ def handler(req):
     # Access request properties
     method = req.method           # HTTP method
     path = req.path              # URL path
-    headers = req.headers        # Request headers
-    query = req.query            # Query parameters
+    headers = req.headers        # Request headers dict
+    query = req.query            # Query parameters dict
     
     # Get specific data
     user_id = req.param("id")    # Path parameter
     data = req.json()            # JSON body
     form = req.form()            # Form data
-    auth = req.bearer_token()    # Bearer token from Authorization header
-    custom_token = req.bearer_token(header="X-API-Token")  # Custom header
+    bearer = req.bearer_token()  # Bearer token from Authorization header
+    basic = req.basic_auth()     # Basic auth tuple (username, password)
+    
+    # Get headers with defaults
+    user_agent = req.get_header("User-Agent", "Unknown")
     
     return response("OK")
 ```
@@ -144,20 +150,27 @@ return json_response({"status": "ok"})
 # HTML response
 return html_response("<h1>Welcome</h1>")
 
+# Text response with explicit content type
+return text_response("Plain text content")
+
+# File response
+return file_response("path/to/file.pdf")
+
+# File response with custom filename
+return file_response("path/to/file.pdf", filename="download.pdf")
+
+# Data response (for downloads)
+return send_data("file content", "filename.txt", "text/plain")
+
 # Redirect
 return redirect("/login")
 
 # Error response
 return error_response(404, "Not found")
 
-# File response
-return send_file("path/to/file.pdf")
-
-# Modify response dynamically
+# Modify response headers
 def handler(req):
     resp = json_response({"message": "Hello"})
-    resp.status_code = 201
-    resp.body = '{"message": "Created"}'
     resp.set_header("X-Custom", "value")
     return resp
 ```
@@ -195,208 +208,14 @@ api.get("/users/{id}", get_user)
 ### Multiple HTTP Methods
 
 ```python
-def resource_handler(req):
-    if req.method == "GET":
-        return json_response({"action": "read"})
-    elif req.method == "POST":
-        return json_response({"action": "create"})
-    elif req.method == "PUT":
-        return json_response({"action": "update"})
-    
-srv.route(["GET", "POST", "PUT"], "/resource", resource_handler)
-```
+# Handle multiple methods with same handler
+def api_info(req):
+    return json_response({
+        "method": req.method,
+        "timestamp": now().format("2006-01-02T15:04:05Z")
+    })
 
-## 📊 Request Processing
-
-### JSON Handling
-
-```python
-def create_user(req):
-    data = req.json()
-    if data == None:
-        return error_response(400, "Invalid JSON")
-    
-    name = data.get("name")
-    email = data.get("email")
-    
-    if not name or not email:
-        return error_response(400, "Name and email required")
-    
-    # Process user creation...
-    return json_response({"id": 123, "name": name, "email": email})
-
-srv.post("/users", create_user)
-```
-
-### Form Data
-
-```python
-def upload_handler(req):
-    form = req.form()
-    title = form.get("title", "Untitled")
-    
-    files = req.files()
-    uploaded_file = files.get("document")
-    
-    if uploaded_file:
-        # Process file...
-        return json_response({
-            "title": title,
-            "filename": uploaded_file.filename,
-            "size": uploaded_file.size
-        })
-    
-    return error_response(400, "No file uploaded")
-
-srv.post("/upload", upload_handler)
-```
-
-### Authentication
-
-The web module provides built-in authentication helpers that work as middleware to protect routes:
-
-#### API Key Authentication
-
-```python
-load("web", "create_server", "api_key_auth", "json_response")
-
-def main():
-    srv = create_server(port=8080)
-    
-    # Create API key authenticator
-    api_auth = api_key_auth(
-        keys=["secret-key-1", "secret-key-2"],
-        header="X-API-Key",                    # Custom header (default: "X-API-Key")
-        query_param="api_key"                  # Also check query parameter
-    )
-    
-    def protected_handler(req):
-        # User info is automatically added to request context
-        user_info = req.context.get("auth_user", {})
-        return json_response({
-            "message": "Access granted",
-            "user_info": user_info
-        })
-    
-    # Apply authentication middleware
-    srv.use(api_auth.middleware())
-    srv.get("/api/protected", protected_handler)
-    
-    srv.run()
-```
-
-#### Bearer Token Authentication
-
-```python
-load("web", "create_server", "bearer_auth", "json_response")
-
-def validate_token(token):
-    # Your token validation logic
-    if token == "valid-bearer-token":
-        return {"user_id": 123, "username": "alice"}
-    return None  # Invalid token
-
-def main():
-    srv = create_server(port=8080)
-    
-    # Create bearer token authenticator
-    bearer_auth_obj = bearer_auth(
-        validate_func=validate_token,
-        header="Authorization"                 # Custom header (default: "Authorization")
-    )
-    
-    def protected_handler(req):
-        user_info = req.context.get("auth_user", {})
-        return json_response({
-            "message": "Access granted",
-            "user": user_info
-        })
-    
-    srv.use(bearer_auth_obj.middleware())
-    srv.get("/api/user", protected_handler)
-    
-    srv.run()
-```
-
-#### Basic Authentication
-
-```python
-load("web", "create_server", "basic_auth", "json_response")
-
-def main():
-    srv = create_server(port=8080)
-    
-    # Create basic authenticator
-    basic_auth_obj = basic_auth(
-        users={"admin": "secret123", "user": "password"},
-        realm="Admin Area"
-    )
-    
-    def admin_handler(req):
-        user_info = req.context.get("auth_user", {})
-        return json_response({
-            "message": "Admin access granted",
-            "username": user_info.get("username")
-        })
-    
-    srv.use(basic_auth_obj.middleware())
-    srv.get("/admin", admin_handler)
-    
-    srv.run()
-```
-
-#### Manual Authentication
-
-For more control, you can manually extract authentication data:
-
-```python
-def protected_handler(req):
-    # Bearer token authentication - multiple approaches
-    
-    # Standard Authorization header (expects "Bearer <token>")
-    auth_token = req.bearer_token()
-    
-    # Custom header with Bearer prefix (expects "Bearer <token>")
-    custom_bearer = req.bearer_token(header="X-Auth-Token")
-    
-    # Custom header with direct token (uses value as-is)
-    api_key = req.bearer_token(header="X-API-Key")
-    
-    if not auth_token and not api_key:
-        return error_response(401, "Authentication required")
-    
-    # Basic authentication
-    auth = req.basic_auth()
-    if auth:
-        username, password = auth
-        # Validate credentials...
-    
-    # Custom header authentication
-    api_key = req.get_header("X-API-Key")
-    if not api_key:
-        return error_response(401, "API key required")
-    
-    return json_response({"message": "Access granted"})
-
-srv.get("/protected", protected_handler)
-```
-
-#### Path-Specific Authentication
-
-```python
-# Apply authentication only to specific routes
-srv.use_for("/api/*", api_auth.middleware())
-srv.use_for("/admin/*", basic_auth_obj.middleware())
-
-# Public routes (no authentication)
-srv.get("/", public_handler)
-srv.get("/health", health_check)
-
-# Protected API routes
-srv.get("/api/data", protected_api_handler)
-
-# Protected admin routes  
-srv.get("/admin/users", admin_users_handler)
+srv.route(["GET", "POST"], "/api/info", api_info)
 ```
 
 ## 🔧 Middleware System
@@ -428,6 +247,8 @@ def main():
     
     srv.get("/api/data", lambda req: json_response({"data": "cors enabled"}))
     srv.run()
+
+main()
 ```
 
 #### Compression Middleware
@@ -458,6 +279,8 @@ def main():
     
     srv.get("/api/large", large_response)
     srv.run()
+
+main()
 ```
 
 #### Rate Limiting Middleware
@@ -468,82 +291,38 @@ load("web", "create_server", "rate_limit_middleware", "json_response")
 def main():
     srv = create_server(port=8080)
     
-    # Default rate limiting (100 requests per 60 seconds)
-    rate_limit_mw = rate_limit_middleware()
-    srv.use(rate_limit_mw)
-    
-    # Custom rate limiting
-    api_rate_limit = rate_limit_middleware(
-        requests=50,     # 50 requests
-        window=60,       # per 60 seconds
-        key_func=lambda req: req.get_header("X-API-Key") or req.client_ip
+    # Basic rate limiting (100 requests per 60 seconds)
+    rate_limiter = rate_limit_middleware(
+        requests=100,
+        window=60
     )
+    srv.use(rate_limiter)
     
-    # Apply to specific routes
-    srv.use_for("/api/*", api_rate_limit)
+    # Custom rate limiting with key function
+    def rate_key(req):
+        # Rate limit by API key if present, otherwise by IP
+        api_key = req.get_header("X-API-Key")
+        if api_key != None:
+            return "api_key:" + api_key
+        return "ip:" + req.client_ip
     
-    srv.get("/api/endpoint", lambda req: json_response({"status": "ok"}))
+    custom_rate_limiter = rate_limit_middleware(
+        requests=1000,
+        window=3600,  # 1 hour
+        key_func=rate_key
+    )
+    srv.use(custom_rate_limiter)
+    
+    srv.get("/api/data", lambda req: json_response({"data": "rate limited"}))
     srv.run()
-```
 
-#### Cache Middleware
-
-```python
-load("web", "create_server", "cache_middleware", "json_response")
-
-def main():
-    srv = create_server(port=8080)
-    
-    # Public cache for static resources
-    static_cache = cache_middleware(
-        max_age=3600,               # 1 hour
-        private=False,              # Public cache
-        patterns=["/static/*", "/assets/*"]
-    )
-    srv.use(static_cache)
-    
-    # Private cache for user data
-    user_cache = cache_middleware(
-        max_age=1800,               # 30 minutes
-        private=True,               # Private cache
-        patterns=["/user/*"],
-        vary=["Authorization"]      # Vary by auth header
-    )
-    srv.use(user_cache)
-    
-    srv.get("/static/logo.png", lambda req: send_file("logo.png"))
-    srv.get("/user/profile", lambda req: json_response({"user": "data"}))
-    srv.run()
-```
-
-#### Request Size Middleware
-
-```python
-load("web", "create_server", "request_size_middleware", "json_response")
-
-def main():
-    srv = create_server(port=8080)
-    
-    # Default limits
-    size_limit_mw = request_size_middleware()
-    srv.use(size_limit_mw)
-    
-    # Custom limits
-    strict_limits = request_size_middleware(
-        max_content_length=1024*1024,  # 1MB
-        max_url_length=2048,           # 2KB URL
-        max_headers=50                 # 50 headers max
-    )
-    srv.use(strict_limits)
-    
-    srv.post("/upload", lambda req: json_response({"size": len(req.body or "")}))
-    srv.run()
+main()
 ```
 
 #### Security Headers Middleware
 
 ```python
-load("web", "create_server", "security_headers_middleware", "response")
+load("web", "create_server", "security_headers_middleware", "json_response")
 
 def main():
     srv = create_server(port=8080)
@@ -563,8 +342,10 @@ def main():
     )
     srv.use(custom_security)
     
-    srv.get("/", lambda req: response("Hello World"))
+    srv.get("/", lambda req: html_response("<h1>Secure Headers</h1>"))
     srv.run()
+
+main()
 ```
 
 #### Logging Middleware
@@ -581,12 +362,14 @@ def main():
     
     # Custom logging format
     custom_logging = logging_middleware(
-        format="{method} {path} {status} {duration}ms {client_ip}"
+        format="{method} {path} {status} {duration}ms - {user_agent}"
     )
     srv.use(custom_logging)
     
-    srv.get("/api/test", lambda req: json_response({"message": "logged"}))
+    srv.get("/api/test", lambda req: json_response({"test": "logged"}))
     srv.run()
+
+main()
 ```
 
 #### Timing Middleware
@@ -602,143 +385,223 @@ def main():
     srv.use(timing_mw)
     
     # Custom timing header
-    custom_timing = timing_middleware(header="X-Processing-Time")
+    custom_timing = timing_middleware(header="X-Process-Time")
     srv.use(custom_timing)
     
-    srv.get("/api/slow", lambda req: json_response({"data": "processed"}))
+    srv.get("/api/timed", lambda req: json_response({"timed": True}))
     srv.run()
+
+main()
 ```
 
-#### JSON Middleware
+#### Request Size Middleware
 
 ```python
-load("web", "create_server", "json_middleware", "json_response")
+load("web", "create_server", "request_size_middleware", "json_response")
 
 def main():
     srv = create_server(port=8080)
     
-    # Automatically set JSON content type for json_response
-    json_mw = json_middleware()
-    srv.use(json_mw)
+    # Default limits
+    size_mw = request_size_middleware()
+    srv.use(size_mw)
     
-    srv.get("/api/data", lambda req: json_response({"auto": "json"}))
+    # Custom limits
+    custom_size = request_size_middleware(
+        max_content_length=5 * 1024 * 1024,  # 5MB
+        max_url_length=1024,                 # 1KB
+        max_headers=50                       # 50 headers
+    )
+    srv.use(custom_size)
+    
+    def upload_handler(req):
+        data = req.json()
+        return json_response({"received": len(str(data))})
+    
+    srv.post("/api/upload", upload_handler)
     srv.run()
+
+main()
+```
+
+#### Cache Middleware
+
+```python
+load("web", "create_server", "cache_middleware", "json_response")
+
+def main():
+    srv = create_server(port=8080)
+    
+    # Basic caching
+    cache_mw = cache_middleware()
+    srv.use(cache_mw)
+    
+    # Custom caching with patterns
+    custom_cache = cache_middleware(
+        max_age=7200,        # 2 hours
+        private=False,       # Public cache
+        patterns=["/api/static/*", "/images/*"],
+        vary=["Accept-Encoding", "User-Agent"]
+    )
+    srv.use(custom_cache)
+    
+    srv.get("/api/static/data", lambda req: json_response({"cached": True}))
+    srv.run()
+
+main()
 ```
 
 ### Custom Middleware
 
 ```python
-# Custom middleware function
-def custom_middleware(req, next):
-    # Before request processing
-    print("Before: {} {}".format(req.method, req.path))
+def custom_middleware(req, next_handler):
+    # Pre-processing
+    print("Processing request to: {}".format(req.path))
     
-    # Add custom header to request
-    req.headers["X-Custom-Header"] = "added"
+    # Call next handler
+    resp = next_handler(req)
     
-    # Call next middleware/handler
-    response = next(req)
+    # Post-processing
+    resp.set_header("X-Processed-By", "Custom-Middleware")
     
-    # After request processing
-    print("After: {} status={}".format(req.path, response.status_code))
-    
-    # Modify response
-    response.set_header("X-Custom-Response", "processed")
-    
-    return response
+    return resp
 
-# Apply custom middleware
+# Use custom middleware
 srv.use(custom_middleware)
-```
-
-### Middleware Order
-
-Middleware is executed in the order it's registered:
-
-```python
-def main():
-    srv = create_server(port=8080)
-    
-    # 1. First - Security headers
-    srv.use(security_headers_middleware())
-    
-    # 2. Second - CORS
-    srv.use(cors_middleware())
-    
-    # 3. Third - Compression
-    srv.use(compression_middleware())
-    
-    # 4. Fourth - Rate limiting
-    srv.use(rate_limit_middleware())
-    
-    # 5. Fifth - Logging
-    srv.use(logging_middleware())
-    
-    # 6. Last - Your route handlers
-    srv.get("/", home_handler)
-    
-    srv.run()
 ```
 
 ### Path-Specific Middleware
 
 ```python
-# Apply middleware to specific paths
-srv.use_for("/api/*", rate_limit_middleware(requests=100))
-srv.use_for("/admin/*", basic_auth_middleware())
-srv.use_for("/static/*", cache_middleware(max_age=86400))
-
-# Global middleware
-srv.use(logging_middleware())
+# Apply middleware only to specific paths
+srv.use_for("/api/*", auth_middleware)
+srv.use_for("/admin/*", admin_middleware)
 ```
 
-## 🔧 Configuration
+## 🔐 Authentication
 
-### Environment Variables
+The web module provides built-in authentication systems for securing your APIs.
 
-```bash
-# Server configuration
-export WEB_HOST="0.0.0.0"
-export WEB_PORT="8080"
-export WEB_READ_TIMEOUT="60"
-export WEB_WRITE_TIMEOUT="60"
-export WEB_MAX_BODY_SIZE="104857600"  # 100MB
-
-# Security configuration
-export WEB_ENABLE_CORS="true"
-export WEB_CORS_ORIGINS="https://example.com,https://app.example.com"
-export WEB_ENABLE_COMPRESSION="true"
-export WEB_DEBUG_MODE="false"
-```
-
-### Programmatic Configuration
+### Basic Authentication
 
 ```python
-srv = create_server(
-    host="localhost",
-    port=8080,
-    read_timeout=30,
-    write_timeout=30,
-    max_body_size=50*1024*1024,  # 50MB
-    enable_cors=True,
-    debug_mode=False
-)
+load("web", "create_server", "basic_auth", "json_response")
+
+def main():
+    srv = create_server(port=8080)
+    
+    # Create basic auth
+    auth = basic_auth(
+        users={"admin": "password123", "user": "secret"},
+        realm="Protected Area"
+    )
+    
+    # Apply to specific routes
+    srv.use_for("/protected/*", auth.middleware())
+    
+    def protected_data(req):
+        basic_info = req.basic_auth()
+        username = basic_info[0] if basic_info != None else "unknown"
+        return json_response({"user": username, "data": "secret"})
+    
+    srv.get("/protected/data", protected_data)
+    srv.run()
+
+main()
+```
+
+### Bearer Token Authentication
+
+```python
+load("web", "create_server", "bearer_auth", "json_response", "error_response")
+
+def main():
+    srv = create_server(port=8080)
+    
+    # Token validation function
+    def validate_token(token):
+        # In real app, validate against database or JWT
+        valid_tokens = {"abc123": {"user": "admin"}, "def456": {"user": "user"}}
+        return valid_tokens.get(token)
+    
+    # Create bearer auth
+    auth = bearer_auth(validate_func=validate_token)
+    
+    # Apply to API routes
+    srv.use_for("/api/*", auth.middleware())
+    
+    def api_data(req):
+        token = req.bearer_token()
+        user_info = validate_token(token) if token != None else None
+        return json_response({"user": user_info, "data": "protected"})
+    
+    srv.get("/api/data", api_data)
+    srv.run()
+
+main()
+```
+
+### API Key Authentication
+
+```python
+load("web", "create_server", "api_key_auth", "json_response")
+
+def main():
+    srv = create_server(port=8080)
+    
+    # Create API key auth
+    auth = api_key_auth(
+        keys=["key123", "key456", "key789"],
+        header="X-API-Key",
+        query_param="api_key"
+    )
+    
+    # Apply to API routes
+    srv.use_for("/api/*", auth.middleware())
+    
+    def api_data(req):
+        api_key = req.get_header("X-API-Key")
+        return json_response({"api_key": api_key, "data": "authenticated"})
+    
+    srv.get("/api/data", api_data)
+    srv.run()
+
+main()
 ```
 
 ## 📁 Static Files
 
+Serve static files like CSS, JavaScript, and images:
+
 ```python
+load("web", "create_server", "html_response")
+
 def main():
     srv = create_server(port=8080)
     
-    # Serve static files
-    srv.static("/static", "./public")
-    srv.static("/assets", "./dist/assets")
+    # Serve static files from ./static directory at /static/* URL
+    srv.static("/static", "./static")
     
-    # Single Page Application support
-    srv.spa("/app", "./dist", fallback="index.html")
+    # Serve files from ./assets directory at /assets/* URL
+    srv.static("/assets", "./assets")
     
+    def home(req):
+        return html_response("""
+        <html>
+            <head>
+                <link rel="stylesheet" href="/static/style.css">
+            </head>
+            <body>
+                <h1>Welcome</h1>
+                <script src="/static/app.js"></script>
+            </body>
+        </html>
+        """)
+    
+    srv.get("/", home)
     srv.run()
+
+main()
 ```
 
 ## 🎯 Error Handling
@@ -746,300 +609,188 @@ def main():
 ### Custom Error Handlers
 
 ```python
-def not_found_handler(req):
-    return json_response({
-        "error": "Not Found",
-        "path": req.path,
-        "method": req.method
-    }, status=404)
-
-def server_error_handler(req):
-    return json_response({
-        "error": "Internal Server Error",
-        "message": "Something went wrong"
-    }, status=500)
-
-# Register error handlers
-srv.error_handler(404, not_found_handler)
-srv.error_handler(500, server_error_handler)
-```
-
-### Built-in Error Responses
-
-```python
-# Standard error responses
-return error_response(400, "Bad request")
-return error_response(401, "Unauthorized")
-return error_response(403, "Forbidden")
-return error_response(404, "Not found")
-return error_response(500, "Internal server error")
-```
-
-## 🔒 Security Features
-
-### CORS Support
-
-```python
-srv = create_server(
-    enable_cors=True,
-    cors_origins=["https://example.com", "https://app.example.com"]
-)
-```
-
-### Request Validation
-
-```python
-def validate_json(req):
-    data = req.json()
-    if data == None:
-        return error_response(400, "Invalid JSON")
-    
-    required_fields = ["name", "email"]
-    for field in required_fields:
-        if not data.get(field):
-            return error_response(400, "{} is required".format(field))
-    
-    return None  # Validation passed
-
-def create_user(req):
-    error = validate_json(req)
-    if error:
-        return error
-    
-    # Process valid request...
-    return json_response({"status": "created"})
-```
-
-## 📈 Performance Tips
-
-1. **Use Route Groups**: Organize related routes for better performance
-2. **Enable Compression**: Reduces response size for text-based content
-3. **Limit Request Size**: Set appropriate `max_body_size` limits
-4. **Static File Caching**: Use proper cache headers for static assets
-5. **JSON Parsing**: Only parse JSON when needed to avoid overhead
-
-## 🔄 Server Lifecycle
-
-```python
-def main():
-    srv = create_server(port=8080)
-    
-    # Register routes
-    srv.get("/", home_handler)
-    
-    # Non-blocking start
-    srv.start()
-    print("Server started on port 8080")
-    
-    # Do other work...
-    
-    # Stop server
-    srv.stop()
-    
-    # Or blocking run (most common)
-    # srv.run()
-
-main()
-```
-
-## 🔧 Recent Improvements
-
-### Response Object Enhancements
-
-The response object now supports full attribute assignment in Starlark:
-
-```python
-def handler(req):
-    resp = json_response({"initial": "data"})
-    
-    # Modify response attributes directly
-    resp.status_code = 201
-    resp.body = '{"updated": "data"}'
-    
-    # Set custom headers
-    resp.set_header("X-Custom-Header", "value")
-    resp.set_header("X-Processing-Time", "123ms")
-    
-    return resp
-```
-
-### Starlark Interface Compliance
-
-All wrapper types now properly implement Starlark interfaces:
-
-- **ServerWrapper**: `starlark.Value`, `starlark.HasAttrs`
-- **RequestWrapper**: `starlark.Value`, `starlark.HasAttrs`
-- **ResponseWrapper**: `starlark.Value`, `starlark.HasAttrs`, `starlark.HasSetField`
-- **RouteGroupWrapper**: `starlark.Value`, `starlark.HasAttrs`
-- **MiddlewareWrapper**: `starlark.Value`, `starlark.HasAttrs`
-- **AuthenticatorWrapper**: `starlark.Value`, `starlark.HasAttrs`
-
-This ensures proper attribute access and assignment behavior in Starlark scripts.
-
-### Bug Fixes
-
-- ✅ Fixed response body and status code assignment issues
-- ✅ Resolved HTTP module parameter compatibility
-- ✅ Improved cookie handling in tests
-- ✅ Enhanced error handling and debugging output
-- ✅ Fixed CORS middleware integration
-
-## 🧪 Testing
-
-The module includes comprehensive tests covering:
-
-- ✅ Basic server functionality
-- ✅ HTTP method handling
-- ✅ Response builders and response object modification
-- ✅ Route groups and parameters
-- ✅ Error handling
-- ✅ Request/response processing
-- ✅ Middleware functionality
-- ✅ Authentication systems
-- ✅ CORS handling
-
-Run tests:
-
-```bash
-go test -v github.com/starpkg/web
-```
-
-## 📋 Examples
-
-### RESTful API
-
-```python
-load("web", "create_server", "json_response", "error_response")
+load("web", "create_server", "json_response", "html_response")
 
 def main():
     srv = create_server(port=8080)
     
-    # In-memory storage
-    users = {}
-    next_id = [1]
-    
-    def list_users(req):
-        return json_response(list(users.values()))
-    
-    def get_user(req):
-        user_id = req.param("id")
-        user = users.get(user_id)
-        if not user:
-            return error_response(404, "User not found")
-        return json_response(user)
-    
-    def create_user(req):
-        data = req.json()
-        if not data:
-            return error_response(400, "Invalid JSON")
-        
-        user = {
-            "id": str(next_id[0]),
-            "name": data.get("name"),
-            "email": data.get("email")
-        }
-        users[user["id"]] = user
-        next_id[0] += 1
-        
-        return json_response(user, status=201)
-    
-    def update_user(req):
-        user_id = req.param("id")
-        if user_id not in users:
-            return error_response(404, "User not found")
-        
-        data = req.json()
-        if not data:
-            return error_response(400, "Invalid JSON")
-        
-        user = users[user_id]
-        user.update(data)
-        return json_response(user)
-    
-    def delete_user(req):
-        user_id = req.param("id")
-        if user_id not in users:
-            return error_response(404, "User not found")
-        
-        del users[user_id]
-        return response("", status=204)
-    
-    # Register routes
-    srv.get("/users", list_users)
-    srv.get("/users/{id}", get_user)
-    srv.post("/users", create_user)
-    srv.put("/users/{id}", update_user)
-    srv.delete("/users/{id}", delete_user)
-    
-    print("API server running on http://localhost:8080")
-    srv.run()
-
-main()
-```
-
-### File Upload Server
-
-```python
-load("web", "create_server", "html_response", "json_response", "error_response")
-
-def main():
-    srv = create_server(port=8080)
-    
-    def upload_form(req):
-        html = """
+    # Custom 404 handler
+    def not_found(req):
+        return html_response("""
         <html>
             <body>
-                <h1>File Upload</h1>
-                <form method="post" action="/upload" enctype="multipart/form-data">
-                    <input type="file" name="file" required>
-                    <button type="submit">Upload</button>
-                </form>
+                <h1>404 - Page Not Found</h1>
+                <p>The page {} was not found.</p>
             </body>
         </html>
-        """
-        return html_response(html)
+        """.format(req.path), status=404)
     
-    def handle_upload(req):
-        files = req.files()
-        if not files or "file" not in files:
-            return error_response(400, "No file uploaded")
-        
-        file = files["file"]
-        
-        # Validate file
-        if file.size > 10 * 1024 * 1024:  # 10MB limit
-            return error_response(400, "File too large")
-        
-        # Save file (simplified)
+    # Custom 500 handler
+    def server_error(req):
         return json_response({
-            "filename": file.filename,
-            "size": file.size,
-            "content_type": file.content_type
-        })
+            "error": "Internal Server Error",
+            "message": "Something went wrong"
+        }, status=500)
     
-    srv.get("/", upload_form)
-    srv.post("/upload", handle_upload)
+    # Register error handlers
+    srv.error_handler(404, not_found)
+    srv.error_handler(500, server_error)
     
-    # Serve uploaded files
-    srv.static("/uploads", "./uploads")
+    # Route that triggers 500 error
+    def broken(req):
+        fail("Intentional error")
     
+    srv.get("/broken", broken)
     srv.run()
 
 main()
 ```
 
-## 📄 API Reference
+## 🔧 Configuration
+
+Configure the web server using environment variables or parameters:
+
+```python
+load("web", "create_server", "response")
+
+def main():
+    # Configuration via parameters
+    srv = create_server(
+        host="0.0.0.0",
+        port=8080,
+        server_header="MyApp/1.0"
+    )
+    
+    # Configuration is also available via environment variables:
+    # web_host=0.0.0.0
+    # web_port=8080
+    # web_read_timeout=30
+    # web_write_timeout=30
+    # web_max_body_size=33554432
+    # web_debug_mode=false
+    # web_server_header=Starlark-Web/1.0
+    
+    srv.get("/", lambda req: response("Configured server"))
+    srv.run()
+
+main()
+```
+
+## 📖 Complete Example
+
+Here's a complete example showing multiple features:
+
+```python
+load("web", "create_server", "json_response", "html_response", "error_response",
+     "basic_auth", "cors_middleware", "logging_middleware", "compression_middleware")
+load("time", "now")
+
+def main():
+    srv = create_server(port=8080)
+    
+    # Add middleware
+    srv.use(logging_middleware())
+    srv.use(cors_middleware())
+    srv.use(compression_middleware())
+    
+    # Create authentication
+    auth = basic_auth(users={"admin": "secret"}, realm="Admin")
+    
+    # In-memory data store
+    todos = []
+    next_id = [1]
+    
+    # Public routes
+    def home(req):
+        return html_response("""
+        <html>
+            <body>
+                <h1>Todo API</h1>
+                <p>Endpoints:</p>
+                <ul>
+                    <li>GET /api/todos - List todos</li>
+                    <li>POST /api/todos - Create todo</li>
+                    <li>GET /admin/stats - Admin stats</li>
+                </ul>
+            </body>
+        </html>
+        """)
+    
+    def list_todos(req):
+        return json_response(todos)
+    
+    def create_todo(req):
+        data = req.json()
+        if data == None or data.get("title") == None:
+            return error_response(400, "Title is required")
+        
+        todo = {
+            "id": next_id[0],
+            "title": data["title"],
+            "completed": False,
+            "created": now().format("2006-01-02T15:04:05Z")
+        }
+        todos.append(todo)
+        next_id[0] = next_id[0] + 1
+        
+        return json_response(todo, status=201)
+    
+    # Protected admin route
+    def admin_stats(req):
+        return json_response({
+            "total_todos": len(todos),
+            "completed": len([t for t in todos if t.get("completed", False)]),
+            "pending": len([t for t in todos if not t.get("completed", False)])
+        })
+    
+    # Register routes
+    srv.get("/", home)
+    srv.get("/api/todos", list_todos)
+    srv.post("/api/todos", create_todo)
+    
+    # Protected routes
+    srv.use_for("/admin/*", auth.middleware())
+    srv.get("/admin/stats", admin_stats)
+    
+    print("Todo API running on http://localhost:8080")
+    print("Admin credentials: admin/secret")
+    srv.run()
+
+main()
+```
+
+## 📋 API Reference
 
 ### Core Functions
 
-- `create_server(host="localhost", port=8080, **config)` - Create HTTP server
+- `create_server(host="localhost", port=8080, server_header="")` - Create HTTP server
 - `response(body, status=200, headers={})` - Create basic response
 - `json_response(data, status=200, headers={})` - Create JSON response
 - `html_response(content, status=200, headers={})` - Create HTML response
+- `text_response(text, status=200)` - Create text response
+- `file_response(filepath, content_type="", filename="")` - Create file response
 - `redirect(location, status=302)` - Create redirect response
 - `error_response(status, message="")` - Create error response
-- `send_file(filepath, content_type=None)` - Send file response
-- `send_data(data, filename, content_type)` - Send data as file
+- `send_file(filepath, content_type="")` - Send file response
+- `send_data(data, filename, content_type="application/octet-stream")` - Send data response
+
+### Authentication Functions
+
+- `basic_auth(users={}, realm="Restricted")` - Basic HTTP authentication
+- `bearer_auth(validate_func, header="Authorization")` - Bearer token authentication
+- `api_key_auth(keys=[], header="X-API-Key", query_param="api_key")` - API key authentication
+
+### Middleware Functions
+
+- `cors_middleware(origins=[], methods=[], headers=[], credentials=False)` - CORS support
+- `compression_middleware(level=6, min_size=1024, types=[])` - Response compression
+- `rate_limit_middleware(requests=100, window=60, key_func=None)` - Rate limiting
+- `cache_middleware(max_age=3600, private=False, patterns=[], vary=[])` - Response caching
+- `request_size_middleware(max_content_length=10MB, max_url_length=2048, max_headers=100)` - Request size limits
+- `security_headers_middleware(**headers)` - Security headers
+- `logging_middleware(format="")` - Request logging
+- `timing_middleware(header="X-Response-Time")` - Response timing
+- `json_middleware()` - JSON content type handling
 
 ### Server Methods
 
@@ -1053,7 +804,8 @@ main()
 - `srv.route(methods, path, handler)` - Register multi-method route
 - `srv.group(prefix)` - Create route group
 - `srv.static(url_path, directory)` - Serve static files
-- `srv.spa(url_path, directory, fallback)` - Serve SPA
+- `srv.use(middleware)` - Add global middleware
+- `srv.use_for(path_pattern, middleware)` - Add path-specific middleware
 - `srv.error_handler(status_codes, handler)` - Register error handler
 - `srv.start()` - Start server (non-blocking)
 - `srv.run()` - Start server (blocking)
@@ -1066,38 +818,43 @@ main()
 - `req.url` - Full URL
 - `req.path` - URL path
 - `req.host` - Host header
-- `req.headers` - Request headers
-- `req.query` - Query parameters
+- `req.remote` - Remote address
+- `req.client_ip` - Client IP address
+- `req.proto` - HTTP protocol
+- `req.headers` - Headers dict
+- `req.query` - Query parameters dict
 - `req.body()` - Raw body content
 - `req.json()` - Parse JSON body
 - `req.form()` - Parse form data
-- `req.files()` - Get uploaded files
+- `req.files()` - Uploaded files
 - `req.param(name)` - Get path parameter
+- `req.get_header(name, default=None)` - Get header with default
+- `req.bearer_token(header="Authorization")` - Get bearer token
+- `req.basic_auth()` - Get basic auth tuple
 - `req.cookie(name)` - Get cookie value
-- `req.get_header(name, default)` - Get header with default
-- `req.bearer_token(header="Authorization")` - Extract Bearer token from specified header
-- `req.basic_auth()` - Get basic auth credentials
 
 ### Response Object
 
-- `resp.status_code` - HTTP status code (assignable)
-- `resp.headers` - Response headers
-- `resp.body` - Response body (assignable)
-- `resp.set_cookie(name, value, **options)` - Set cookie
-- `resp.delete_cookie(name, **options)` - Delete cookie
-- `resp.set_header(name, value)` - Set response header
-- `resp.get_header(name, default)` - Get response header with default
+- `resp.status_code` - HTTP status code
+- `resp.headers` - Headers dict
+- `resp.body` - Response body
+- `resp.set_header(name, value)` - Set header
+- `resp.get_header(name, default=None)` - Get header with default
 
 ## 🤝 Contributing
 
-Contributions are welcome! Please feel free to submit a Pull Request.
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Add tests for new functionality
+5. Submit a pull request
 
 ## 📄 License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
+This project is licensed under the MIT License - see the LICENSE file for details.
 
 ## 🙏 Acknowledgments
 
-- Built on top of the excellent [Gin](https://github.com/gin-gonic/gin) web framework
-- Inspired by [Flask](https://flask.palletsprojects.com/) for API design
-- Part of the [Starlark](https://github.com/bazelbuild/starlark) ecosystem
+- Built on top of the [Gin Web Framework](https://github.com/gin-gonic/gin)
+- Inspired by [Flask](https://flask.palletsprojects.com/) for Python
+- Part of the [Starlark Package Collection](https://github.com/starpkg)

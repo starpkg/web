@@ -1,244 +1,476 @@
-# Complete Blog Application Example
-# This example demonstrates a full blog application with admin functionality,
-# sessions, authentication, and basic CRUD operations for posts and comments.
-
-load("web", "create_server", "response", "json_response", "redirect", 
-     "create_session_manager", "basic_auth", "send_file")
-load("time")
+load("web", "create_server", "html_response", "json_response", "error_response", "redirect", "basic_auth", "cors_middleware", "logging_middleware", "compression_middleware")
+load("time", "now")
 
 def main():
-    # Create session manager
-    session_manager = create_session_manager(secret="blog-secret-key")
+    srv = create_server(port=8080, server_header="Blog-Server/1.0")
     
-    srv = create_server(
-        port=8080,
-        session_manager=session_manager
-    )
+    # Add middleware
+    srv.use(logging_middleware())
+    srv.use(cors_middleware())
+    srv.use(compression_middleware())
     
-    # Simple in-memory database (use shared_dict for thread safety)
-    posts = shared_dict()
-    comments = shared_dict()
-    next_post_id = [1]  # Use list to allow modification
-    next_comment_id = [1]
+    # Create authentication for admin
+    auth = basic_auth(users={"admin": "blogpass"}, realm="Blog Admin")
     
-    # Admin auth
-    admin_auth = basic_auth(users={"admin": "admin123"})
+    # In-memory data store
+    posts = []
+    next_id = [1]
     
-    # Helper to render HTML template
-    def render_html(title, content):
-        return """
-        <html>
-            <head>
-                <title>{}</title>
-                <link rel="stylesheet" href="/static/style.css">
-            </head>
-            <body>
-                <header>
-                    <h1>My Blog</h1>
-                    <nav>
-                        <a href="/">Home</a>
-                        <a href="/admin">Admin</a>
-                    </nav>
-                </header>
-                <main>
-                    {}
-                </main>
-            </body>
-        </html>
-        """.format(title, content)
+    # Sample data
+    posts.append({
+        "id": 1,
+        "title": "Welcome to My Blog",
+        "content": "This is my first blog post! Welcome to my simple blog application built with Starlark.",
+        "author": "admin",
+        "created": "2024-01-01T12:00:00Z",
+        "updated": "2024-01-01T12:00:00Z"
+    })
+    next_id[0] = 2
     
-    # Home page - list posts
+    # Helper function to get post by ID
+    def get_post_by_id(post_id):
+        for post in posts:
+            if post["id"] == post_id:
+                return post
+        return None
+    
+    # Helper function to format date
+    def format_date(date_str):
+        return date_str.split("T")[0]
+    
+    # Routes
     def home(req):
-        content = "<h2>Recent Posts</h2>"
+        posts_html = ""
+        for post in posts:
+            posts_html = posts_html + """
+                <div class="post">
+                    <h3><a href="/post/{}">{}</a></h3>
+                    <p class="meta">By {} on {}</p>
+                    <p>{}</p>
+                </div>
+            """.format(
+                post["id"],
+                post["title"],
+                post["author"],
+                format_date(post["created"]),
+                post["content"][:200] + "..." if len(post["content"]) > 200 else post["content"]
+            )
         
-        if len(posts) == 0:
-            content = content + "<p>No posts yet.</p>"
-        else:
-            content = content + "<ul>"
-            for post_id in posts:
-                post = posts[post_id]
-                content = content + '<li><a href="/post/{}">{}</a> - {}</li>'.format(
-                    post["id"], 
-                    post["title"],
-                    post["created"]
-                )
-            content = content + "</ul>"
+        if posts_html == "":
+            posts_html = "<p>No posts yet. <a href='/admin/new'>Create one</a>!</p>"
         
-        html = render_html("Home", content)
-        return response(html, headers={"Content-Type": "text/html"})
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>My Blog</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
+                .post { margin-bottom: 30px; padding: 20px; border: 1px solid #eee; }
+                .meta { color: #666; font-size: 0.9em; margin-bottom: 10px; }
+                .nav { margin-bottom: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+                .form-group { margin-bottom: 15px; }
+                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+                .form-group input, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
+                .btn { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+                .btn:hover { background: #0056b3; }
+                .error { color: red; margin-bottom: 15px; }
+                .success { color: green; margin-bottom: 15px; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>My Blog</h1>
+                <div class="nav">
+                    <a href="/">Home</a>
+                    <a href="/admin/new">New Post</a>
+                    <a href="/admin/list">Admin</a>
+                </div>
+            </div>
+            
+            <div class="content">
+                {}
+            </div>
+        </body>
+        </html>
+        """.format(posts_html))
     
-    # View single post
     def view_post(req):
         post_id_str = req.param("id")
-        if post_id_str == None:
-            return error_response(400, "Post ID required")
+        post_id = int(post_id_str) if post_id_str else 0
         
-        post_id = int(post_id_str)
-        post = posts.get(post_id)
-        
+        post = get_post_by_id(post_id)
         if post == None:
             return error_response(404, "Post not found")
         
-        # Build post HTML
-        content = "<article>"
-        content = content + "<h2>{}</h2>".format(post["title"])
-        content = content + "<p class='meta'>Posted on {}</p>".format(post["created"])
-        content = content + "<div class='content'>{}</div>".format(post["content"])
-        content = content + "</article>"
-        
-        # Add comments section
-        content = content + "<h3>Comments</h3>"
-        post_comments = comments.get(post_id, [])
-        
-        if len(post_comments) == 0:
-            content = content + "<p>No comments yet.</p>"
-        else:
-            for comment in post_comments:
-                content = content + "<div class='comment'>"
-                content = content + "<strong>{}</strong>: {}".format(
-                    comment["author"], 
-                    comment["text"]
-                )
-                content = content + "</div>"
-        
-        # Comment form
-        content = content + """
-        <form method="post" action="/post/{}/comment">
-            <input name="author" placeholder="Your name" required>
-            <textarea name="text" placeholder="Your comment" required></textarea>
-            <button type="submit">Post Comment</button>
-        </form>
-        """.format(post_id)
-        
-        html = render_html(post["title"], content)
-        return response(html, headers={"Content-Type": "text/html"})
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>{} - My Blog</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
+                .post { margin-bottom: 30px; }
+                .meta { color: #666; font-size: 0.9em; margin-bottom: 20px; }
+                .nav { margin-bottom: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+                .content { line-height: 1.6; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>My Blog</h1>
+                <div class="nav">
+                    <a href="/">Home</a>
+                    <a href="/admin/new">New Post</a>
+                    <a href="/admin/list">Admin</a>
+                </div>
+            </div>
+            
+            <article class="post">
+                <h2>{}</h2>
+                <p class="meta">By {} on {} (Updated: {})</p>
+                <div class="content">{}</div>
+            </article>
+        </body>
+        </html>
+        """.format(
+            post["title"],
+            post["title"],
+            post["author"],
+            format_date(post["created"]),
+            format_date(post["updated"]),
+            post["content"]
+        ))
     
-    # Post comment
-    def post_comment(req):
+    def new_post_form(req):
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>New Post - My Blog</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
+                .form-group { margin-bottom: 15px; }
+                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+                .form-group input, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
+                .btn { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+                .btn:hover { background: #0056b3; }
+                .nav { margin-bottom: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>My Blog</h1>
+                <div class="nav">
+                    <a href="/">Home</a>
+                    <a href="/admin/new">New Post</a>
+                    <a href="/admin/list">Admin</a>
+                </div>
+            </div>
+            
+            <h2>Create New Post</h2>
+            <form method="POST" action="/admin/create">
+                <div class="form-group">
+                    <label for="title">Title:</label>
+                    <input type="text" id="title" name="title" required>
+                </div>
+                <div class="form-group">
+                    <label for="content">Content:</label>
+                    <textarea id="content" name="content" rows="10" required></textarea>
+                </div>
+                <button type="submit" class="btn">Create Post</button>
+            </form>
+        </body>
+        </html>
+        """)
+    
+    def create_post(req):
+        basic_info = req.basic_auth()
+        if basic_info == None:
+            return error_response(401, "Authentication required")
+        
+        username = basic_info[0]
+        
+        form_data = req.form()
+        if form_data == None:
+            return error_response(400, "Form data required")
+        
+        title = form_data.get("title")
+        content = form_data.get("content")
+        
+        if title == None or content == None or title == "" or content == "":
+            return error_response(400, "Title and content are required")
+        
+        current_time = now().format("2006-01-02T15:04:05Z")
+        post = {
+            "id": next_id[0],
+            "title": title,
+            "content": content,
+            "author": username,
+            "created": current_time,
+            "updated": current_time
+        }
+        
+        posts.append(post)
+        next_id[0] = next_id[0] + 1
+        
+        return redirect("/")
+    
+    def admin_list(req):
+        basic_info = req.basic_auth()
+        if basic_info == None:
+            return error_response(401, "Authentication required")
+        
+        posts_html = ""
+        for post in posts:
+            posts_html = posts_html + """
+                <tr>
+                    <td>{}</td>
+                    <td><a href="/post/{}">{}</a></td>
+                    <td>{}</td>
+                    <td>{}</td>
+                    <td>
+                        <a href="/admin/edit/{}">Edit</a>
+                        <a href="/admin/delete/{}" onclick="return confirm('Are you sure?')">Delete</a>
+                    </td>
+                </tr>
+            """.format(
+                post["id"],
+                post["id"],
+                post["title"],
+                post["author"],
+                format_date(post["created"]),
+                post["id"],
+                post["id"]
+            )
+        
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Admin - My Blog</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
+                .nav { margin-bottom: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+                table { width: 100%; border-collapse: collapse; }
+                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
+                th { background-color: #f2f2f2; }
+                .actions a { margin-right: 10px; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>My Blog</h1>
+                <div class="nav">
+                    <a href="/">Home</a>
+                    <a href="/admin/new">New Post</a>
+                    <a href="/admin/list">Admin</a>
+                </div>
+            </div>
+            
+            <h2>Manage Posts</h2>
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Title</th>
+                        <th>Author</th>
+                        <th>Created</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {}
+                </tbody>
+            </table>
+        </body>
+        </html>
+        """.format(posts_html))
+    
+    def edit_post_form(req):
+        basic_info = req.basic_auth()
+        if basic_info == None:
+            return error_response(401, "Authentication required")
+        
         post_id_str = req.param("id")
-        if post_id_str == None:
-            return error_response(400, "Post ID required")
+        post_id = int(post_id_str) if post_id_str else 0
         
-        post_id = int(post_id_str)
-        
-        # Check post exists
-        if posts.get(post_id) == None:
+        post = get_post_by_id(post_id)
+        if post == None:
             return error_response(404, "Post not found")
         
-        form = req.form()
-        author = form.get("author", "").strip()
-        text = form.get("text", "").strip()
-        
-        if author == "" or text == "":
-            return error_response(400, "Author and text required")
-        
-        # Add comment
-        if comments.get(post_id) == None:
-            comments[post_id] = []
-        
-        comment = {
-            "id": next_comment_id[0],
-            "author": author,
-            "text": text,
-            "created": time.now().format(time.DateTime)
-        }
-        post_comments = comments[post_id]
-        post_comments.append(comment)
-        comments[post_id] = post_comments
-        next_comment_id[0] = next_comment_id[0] + 1
-        
-        return redirect("/post/{}".format(post_id))
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Edit Post - My Blog</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
+                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
+                .form-group { margin-bottom: 15px; }
+                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
+                .form-group input, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
+                .btn { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
+                .btn:hover { background: #0056b3; }
+                .nav { margin-bottom: 20px; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="header">
+                <h1>My Blog</h1>
+                <div class="nav">
+                    <a href="/">Home</a>
+                    <a href="/admin/new">New Post</a>
+                    <a href="/admin/list">Admin</a>
+                </div>
+            </div>
+            
+            <h2>Edit Post</h2>
+            <form method="POST" action="/admin/update/{}">
+                <div class="form-group">
+                    <label for="title">Title:</label>
+                    <input type="text" id="title" name="title" value="{}" required>
+                </div>
+                <div class="form-group">
+                    <label for="content">Content:</label>
+                    <textarea id="content" name="content" rows="10" required>{}</textarea>
+                </div>
+                <button type="submit" class="btn">Update Post</button>
+            </form>
+        </body>
+        </html>
+        """.format(post["id"], post["title"], post["content"]))
     
-    # Admin dashboard
-    def admin_dashboard(req):
-        content = "<h2>Admin Dashboard</h2>"
-        content = content + "<p><a href='/admin/new'>Create New Post</a></p>"
-        content = content + "<h3>All Posts</h3>"
+    def update_post(req):
+        basic_info = req.basic_auth()
+        if basic_info == None:
+            return error_response(401, "Authentication required")
         
-        if len(posts) == 0:
-            content = content + "<p>No posts yet.</p>"
-        else:
-            content = content + "<ul>"
-            for post_id in posts:
-                post = posts[post_id]
-                content = content + '<li>{} - <a href="/admin/edit/{}">Edit</a></li>'.format(
-                    post["title"], 
-                    post["id"]
-                )
-            content = content + "</ul>"
+        post_id_str = req.param("id")
+        post_id = int(post_id_str) if post_id_str else 0
         
-        html = render_html("Admin Dashboard", content)
-        return response(html, headers={"Content-Type": "text/html"})
+        post = get_post_by_id(post_id)
+        if post == None:
+            return error_response(404, "Post not found")
+        
+        form_data = req.form()
+        if form_data == None:
+            return error_response(400, "Form data required")
+        
+        title = form_data.get("title")
+        content = form_data.get("content")
+        
+        if title == None or content == None or title == "" or content == "":
+            return error_response(400, "Title and content are required")
+        
+        post["title"] = title
+        post["content"] = content
+        post["updated"] = now().format("2006-01-02T15:04:05Z")
+        
+        return redirect("/admin/list")
     
-    # New post form
-    def new_post_form(req):
-        content = """
-        <h2>Create New Post</h2>
-        <form method="post" action="/admin/new">
-            <input name="title" placeholder="Post title" required>
-            <textarea name="content" placeholder="Post content" rows="10" required></textarea>
-            <button type="submit">Create Post</button>
-        </form>
-        """
+    def delete_post(req):
+        basic_info = req.basic_auth()
+        if basic_info == None:
+            return error_response(401, "Authentication required")
         
-        html = render_html("New Post", content)
-        return response(html, headers={"Content-Type": "text/html"})
-    
-    # Create post
-    def create_post(req):
-        form = req.form()
-        title = form.get("title", "").strip()
-        content_text = form.get("content", "").strip()
+        post_id_str = req.param("id")
+        post_id = int(post_id_str) if post_id_str else 0
         
-        if title == "" or content_text == "":
-            return error_response(400, "Title and content required")
+        for i, post in enumerate(posts):
+            if post["id"] == post_id:
+                posts.pop(i)
+                return redirect("/admin/list")
         
-        post = {
-            "id": next_post_id[0],
-            "title": title,
-            "content": content_text,
-            "created": time.now().format(time.DateTime)
-        }
-        posts[next_post_id[0]] = post
-        next_post_id[0] = next_post_id[0] + 1
-        
-        session = session_manager.get_session(req)
-        session.flash("Post created successfully!", "success")
-        
-        return redirect("/admin")
+        return error_response(404, "Post not found")
     
     # API endpoints
     def api_posts(req):
-        post_list = [posts[post_id] for post_id in posts]
-        return json_response(post_list)
+        if req.method == "GET":
+            return json_response({"posts": posts})
+        elif req.method == "POST":
+            basic_info = req.basic_auth()
+            if basic_info == None:
+                return error_response(401, "Authentication required")
+            
+            username = basic_info[0]
+            
+            data = req.json()
+            if data == None:
+                return error_response(400, "JSON data required")
+            
+            title = data.get("title")
+            content = data.get("content")
+            
+            if title == None or content == None:
+                return error_response(400, "Title and content are required")
+            
+            current_time = now().format("2006-01-02T15:04:05Z")
+            post = {
+                "id": next_id[0],
+                "title": title,
+                "content": content,
+                "author": username,
+                "created": current_time,
+                "updated": current_time
+            }
+            
+            posts.append(post)
+            next_id[0] = next_id[0] + 1
+            
+            return json_response(post, status=201)
+        else:
+            return error_response(405, "Method not allowed")
     
-    def api_post_comments(req):
+    def api_post(req):
         post_id_str = req.param("id")
-        if post_id_str == None:
-            return error_response(400, "Post ID required")
+        post_id = int(post_id_str) if post_id_str else 0
         
-        post_id = int(post_id_str)
-        return json_response(comments.get(post_id, []))
+        post = get_post_by_id(post_id)
+        if post == None:
+            return error_response(404, "Post not found")
+        
+        return json_response(post)
     
-    # Register routes
+    # Register public routes
     srv.get("/", home)
     srv.get("/post/{id}", view_post)
-    srv.post("/post/{id}/comment", post_comment)
     
-    # Admin routes (protected)
-    srv.use_for("/admin/*", admin_auth.middleware())
-    srv.get("/admin", admin_dashboard)
+    # Register admin routes with authentication
+    srv.use_for("/admin/*", auth.middleware())
     srv.get("/admin/new", new_post_form)
-    srv.post("/admin/new", create_post)
+    srv.post("/admin/create", create_post)
+    srv.get("/admin/list", admin_list)
+    srv.get("/admin/edit/{id}", edit_post_form)
+    srv.post("/admin/update/{id}", update_post)
+    srv.get("/admin/delete/{id}", delete_post)
     
-    # API routes
-    srv.get("/api/posts", api_posts)
-    srv.get("/api/posts/{id}/comments", api_post_comments)
+    # Register API routes with authentication
+    srv.use_for("/api/*", auth.middleware())
+    srv.route(["GET", "POST"], "/api/posts", api_posts)
+    srv.get("/api/posts/{id}", api_post)
     
-    # Static files
-    srv.static("/static", "./static")
+    print("Blog server running on http://localhost:8080")
+    print("Admin credentials: admin/blogpass")
+    print("API endpoints:")
+    print("  GET /api/posts - List all posts")
+    print("  POST /api/posts - Create new post")
+    print("  GET /api/posts/{id} - Get specific post")
     
-    print("Blog running on http://localhost:8080")
     srv.run()
 
 main() 
