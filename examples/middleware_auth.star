@@ -8,8 +8,16 @@ def main():
     
     # Setup authentication providers
     basic_auth_provider = basic_auth(users={"admin": "secret", "user": "password"}, realm="Demo")
-    bearer_auth_provider = bearer_auth(tokens={"token123": "admin", "token456": "user"}, realm="API")
-    api_key_provider = api_key_auth(api_keys={"key123": "admin", "key456": "user"}, header="X-API-Key")
+    
+    # Bearer token validation function
+    def validate_bearer_token(token):
+        token_map = {"token123": "admin", "token456": "user"}
+        return token_map.get(token, None)
+    
+    bearer_auth_provider = bearer_auth(validate_func=validate_bearer_token)
+    
+    # API Key authentication with list of keys
+    api_key_provider = api_key_auth(keys=["key123", "key456"], header="X-API-Key")
     
     # Global middleware
     srv.use(logging_middleware())
@@ -19,14 +27,15 @@ def main():
     srv.use(timing_middleware())
     
     # Rate limiting for API endpoints
-    srv.use_for("/api/*", rate_limit_middleware(requests_per_minute=100))
+    srv.use_for("/api/*", rate_limit_middleware(requests=100, window=60))
     
     # Custom middleware example
     def custom_header_middleware():
-        def middleware(req):
+        def middleware(req, next):
             # Add custom header to all responses
-            req.set_header("X-Custom-Server", "Starlark-Web")
-            return None  # Continue to next middleware/handler
+            resp = next(req)
+            resp.set_header("X-Custom-Server", "Starlark-Web")
+            return resp
         return middleware
     
     srv.use(custom_header_middleware())
@@ -78,7 +87,7 @@ def main():
                 
                 <div class="auth-type">
                     <h3>API Key</h3>
-                    <p>API Keys: key123 (admin) or key456 (user)</p>
+                    <p>API Keys: key123 or key456</p>
                     <p><a href="/api-key-protected">Try API Key Protected Route</a></p>
                     <pre>curl -H "X-API-Key: key123" http://localhost:8080/api-key-protected</pre>
                 </div>

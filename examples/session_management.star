@@ -61,6 +61,7 @@ def main():
                 <a href="/user-profile">User Profile</a>
                 <a href="/admin-only">Admin Only</a>
                 <a href="/api/status">API Status</a>
+                <a href="/logout">Logout</a>
             </div>
             
             <div class="section">
@@ -71,6 +72,7 @@ def main():
                     <li><strong>Protected Routes:</strong> Routes that require authentication</li>
                     <li><strong>Visit Tracking:</strong> Track user access patterns</li>
                     <li><strong>Role-based Access:</strong> Different access levels for different users</li>
+                    <li><strong>Logout Support:</strong> Basic auth logout workaround</li>
                 </ul>
             </div>
             
@@ -91,6 +93,18 @@ def main():
                     <li><a href="/admin-only">Admin Only</a> - Requires admin privileges</li>
                     <li><a href="/api/protected">Protected API</a> - API endpoint requiring auth</li>
                 </ul>
+            </div>
+            
+            <div class="section">
+                <h2>Logout Feature</h2>
+                <div class="info">
+                    <p>HTTP Basic Authentication doesn't have a standard logout mechanism, but we provide a workaround:</p>
+                    <ul>
+                        <li>Click <a href="/logout">Logout</a> to force browser to ask for new credentials</li>
+                        <li>Cancel the authentication dialog to effectively "log out"</li>
+                        <li>Or provide different credentials to switch users</li>
+                    </ul>
+                </div>
             </div>
             
             <div class="section">
@@ -124,6 +138,7 @@ def main():
                 <a href="/">Home</a>
                 <a href="/login">Login Demo</a>
                 <a href="/protected">Protected Area</a>
+                <a href="/logout">Logout</a>
             </div>
             
             <h1>Login Demo</h1>
@@ -140,6 +155,9 @@ def main():
                 <li><a href="/user-profile">User Profile</a> - User-specific content</li>
                 <li><a href="/admin-only">Admin Only</a> - Admin-only content</li>
             </ul>
+            
+            <h2>Logout</h2>
+            <p>To log out, click <a href="/logout">Logout</a> and then cancel the authentication dialog.</p>
             
             <h2>API Testing</h2>
             <p>Test with curl commands:</p>
@@ -158,6 +176,40 @@ curl -u admin:secret http://localhost:8080/api/protected
             </html>
         """)
     
+    def logout(req):
+        # Force browser to ask for new credentials by returning 401 with different realm
+        return html_response("""
+        <!DOCTYPE html>
+        <html>
+        <head>
+            <title>Logout</title>
+            <style>
+                body { font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto; padding: 20px; }
+                .info { background: #d1ecf1; color: #0c5460; padding: 15px; border-radius: 4px; margin: 20px 0; }
+                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
+                .nav a:hover { text-decoration: underline; }
+            </style>
+        </head>
+        <body>
+            <div class="nav">
+                <a href="/">Home</a>
+                <a href="/login">Login Demo</a>
+                <a href="/logout">Logout</a>
+            </div>
+            
+            <h1>Logout Successful</h1>
+            
+            <div class="info">
+                <p>You have been logged out successfully.</p>
+                <p>To log in again, click on any protected link and provide your credentials.</p>
+            </div>
+            
+            <p><a href="/">Return to Home</a></p>
+            <p><a href="/protected">Access Protected Area</a> (will ask for login)</p>
+        </body>
+        </html>
+        """, status=401, headers={"WWW-Authenticate": "Basic realm=\"Logout - Login Again\""})
+    
     def api_status(req):
         return json_response({
             "status": "running",
@@ -172,6 +224,7 @@ curl -u admin:secret http://localhost:8080/api/protected
             "public_routes": [
                 "/",
                 "/login",
+                "/logout",
                 "/api/status"
             ],
             "timestamp": now().format("2006-01-02T15:04:05Z")
@@ -199,6 +252,8 @@ curl -u admin:secret http://localhost:8080/api/protected
                 .visit-history {{ background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }}
                 .visit-history ul {{ list-style-type: none; padding: 0; }}
                 .visit-history li {{ padding: 5px 0; border-bottom: 1px solid #dee2e6; }}
+                .logout-btn {{ background: #dc3545; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px; display: inline-block; margin-left: 10px; }}
+                .logout-btn:hover {{ background: #c82333; text-decoration: none; }}
             </style>
         </head>
             <body>
@@ -207,6 +262,7 @@ curl -u admin:secret http://localhost:8080/api/protected
                 <a href="/protected">Protected Area</a>
                 <a href="/user-profile">User Profile</a>
                 <a href="/admin-only">Admin Only</a>
+                <a href="/logout" class="logout-btn">Logout</a>
             </div>
             
             <div class="welcome">
@@ -259,6 +315,8 @@ curl -u admin:secret http://localhost:8080/api/protected
                 .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
                 .stat-card {{ background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }}
                 .stat-value {{ font-size: 24px; font-weight: bold; color: #007bff; }}
+                .logout-btn {{ background: #dc3545; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px; display: inline-block; margin-left: 10px; }}
+                .logout-btn:hover {{ background: #c82333; text-decoration: none; }}
             </style>
         </head>
         <body>
@@ -267,6 +325,7 @@ curl -u admin:secret http://localhost:8080/api/protected
                 <a href="/protected">Protected Area</a>
                 <a href="/user-profile">User Profile</a>
                 <a href="/admin-only">Admin Only</a>
+                <a href="/logout" class="logout-btn">Logout</a>
             </div>
             
             <div class="profile">
@@ -335,6 +394,8 @@ curl -u admin:secret http://localhost:8080/api/protected
                 .admin-actions {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }}
                 .action-card {{ background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }}
                 .users-list {{ background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }}
+                .logout-btn {{ background: #dc3545; color: white; padding: 8px 15px; text-decoration: none; border-radius: 4px; display: inline-block; margin-left: 10px; }}
+                .logout-btn:hover {{ background: #c82333; text-decoration: none; }}
             </style>
         </head>
         <body>
@@ -343,6 +404,7 @@ curl -u admin:secret http://localhost:8080/api/protected
                 <a href="/protected">Protected Area</a>
                 <a href="/user-profile">User Profile</a>
                 <a href="/admin-only">Admin Only</a>
+                <a href="/logout" class="logout-btn">Logout</a>
             </div>
             
             <div class="admin-panel">
@@ -400,6 +462,7 @@ curl -u admin:secret http://localhost:8080/api/protected
     # REGISTER PUBLIC ROUTES
     srv.get("/", home)
     srv.get("/login", login_demo)
+    srv.get("/logout", logout)
     srv.get("/api/status", api_status)
     
     # REGISTER PROTECTED ROUTES (with authentication middleware)
@@ -424,6 +487,7 @@ curl -u admin:secret http://localhost:8080/api/protected
     print("Public endpoints:")
     print("  GET / - Home page")
     print("  GET /login - Login demo page")
+    print("  GET /logout - Logout (forces new authentication)")
     print("  GET /api/status - API status (public)")
     print("")
     print("Protected endpoints (require authentication):")
@@ -438,6 +502,7 @@ curl -u admin:secret http://localhost:8080/api/protected
     print("  - Role-based access control")
     print("  - Protected API endpoints")
     print("  - User-specific content")
+    print("  - Logout functionality (workaround for Basic Auth)")
     
     srv.run()
 

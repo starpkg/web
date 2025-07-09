@@ -395,14 +395,12 @@ Create custom middleware functions:
 
 ```python
 def custom_middleware():
-    def middleware(req):
-        # Pre-processing
-        req.set_header("X-Custom-Header", "MyValue")
-        
-        # Return None to continue to next middleware/handler
+    def middleware(req, next):
+        # Add custom header to all responses
+        resp = next(req)
+        resp.set_header("X-Custom-Server", "Starlark-Web")
         # Return a response to short-circuit the chain
-        return None
-    
+        return resp
     return middleware
 
 srv.use(custom_middleware())
