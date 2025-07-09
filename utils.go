@@ -30,6 +30,7 @@ const (
 	HeaderContentDisposition = "Content-Disposition"
 	HeaderContentEncoding    = "Content-Encoding"
 	HeaderAuthorization      = "Authorization"
+	HeaderWWWAuthenticate    = "WWW-Authenticate"
 	HeaderAPIKey             = "X-API-Key"
 	HeaderCacheControl       = "Cache-Control"
 	HeaderServer             = "Server"
@@ -108,6 +109,19 @@ func createJSONErrorResponse(statusCode int, message string) *Response {
 		StatusCode: statusCode,
 		Headers: map[string]string{
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
+		},
+		Body: fmt.Sprintf(`{"error":%q,"code":%d}`, message, statusCode),
+	}
+}
+
+// createBasicAuthChallengeResponse creates a 401 response with WWW-Authenticate header
+// for Basic Authentication. This triggers the browser to show the authentication dialog.
+func createBasicAuthChallengeResponse(statusCode int, message string, realm string) *Response {
+	return &Response{
+		StatusCode: statusCode,
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType):     MIMEApplicationJSON,
+			canonicalHeader(HeaderWWWAuthenticate): fmt.Sprintf("Basic realm=\"%s\"", realm),
 		},
 		Body: fmt.Sprintf(`{"error":%q,"code":%d}`, message, statusCode),
 	}

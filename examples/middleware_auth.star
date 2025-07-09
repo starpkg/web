@@ -1,7 +1,7 @@
 # Middleware and Authentication Demo
 # This example demonstrates various middleware and authentication features
 
-load("web", "create_server", "html_response", "json_response", "error_response", "basic_auth", "bearer_auth", "api_key_auth", "cors_middleware", "logging_middleware", "compression_middleware", "rate_limiting_middleware", "security_headers_middleware", "timing_middleware")
+load("web", "create_server", "html_response", "json_response", "error_response", "basic_auth", "bearer_auth", "api_key_auth", "cors_middleware", "logging_middleware", "compression_middleware", "rate_limit_middleware", "security_headers_middleware", "timing_middleware")
 
 def main():
     srv = create_server(port=8080, server_header="Auth-Demo/1.0")
@@ -19,7 +19,7 @@ def main():
     srv.use(timing_middleware())
     
     # Rate limiting for API endpoints
-    srv.use_for("/api/*", rate_limiting_middleware(requests_per_minute=100))
+    srv.use_for("/api/*", rate_limit_middleware(requests_per_minute=100))
     
     # Custom middleware example
     def custom_header_middleware():

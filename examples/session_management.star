@@ -192,13 +192,13 @@ curl -u admin:secret http://localhost:8080/api/protected
         <head>
             <title>Protected Area</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .welcome { background: #d4edda; color: #155724; padding: 15px; border-radius: 4px; margin: 20px 0; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                .visit-history { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }
-                .visit-history ul { list-style-type: none; padding: 0; }
-                .visit-history li { padding: 5px 0; border-bottom: 1px solid #dee2e6; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .welcome {{ background: #d4edda; color: #155724; padding: 15px; border-radius: 4px; margin: 20px 0; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                .visit-history {{ background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }}
+                .visit-history ul {{ list-style-type: none; padding: 0; }}
+                .visit-history li {{ padding: 5px 0; border-bottom: 1px solid #dee2e6; }}
             </style>
         </head>
             <body>
@@ -252,13 +252,13 @@ curl -u admin:secret http://localhost:8080/api/protected
         <head>
             <title>User Profile - {}</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .profile { background: #f8f9fa; padding: 20px; border-radius: 4px; margin: 20px 0; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }
-                .stat-card { background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }
-                .stat-value { font-size: 24px; font-weight: bold; color: #007bff; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .profile {{ background: #f8f9fa; padding: 20px; border-radius: 4px; margin: 20px 0; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                .stats {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 20px; margin: 20px 0; }}
+                .stat-card {{ background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }}
+                .stat-value {{ font-size: 24px; font-weight: bold; color: #007bff; }}
             </style>
         </head>
         <body>
@@ -328,13 +328,13 @@ curl -u admin:secret http://localhost:8080/api/protected
         <head>
             <title>Admin Only Area</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .admin-panel { background: #fff3cd; color: #856404; padding: 20px; border-radius: 4px; margin: 20px 0; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                .admin-actions { display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }
-                .action-card { background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }
-                .users-list { background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .admin-panel {{ background: #fff3cd; color: #856404; padding: 20px; border-radius: 4px; margin: 20px 0; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                .admin-actions {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); gap: 20px; margin: 20px 0; }}
+                .action-card {{ background: white; padding: 15px; border: 1px solid #dee2e6; border-radius: 4px; }}
+                .users-list {{ background: #f8f9fa; padding: 15px; border-radius: 4px; margin: 20px 0; }}
             </style>
         </head>
         <body>

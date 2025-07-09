@@ -35,6 +35,10 @@ func (a *Authenticator) Middleware() MiddlewareFunc {
 	return func(req *Request, next NextFunc) *Response {
 		result := a.authenticate(req)
 		if !result.Success {
+			// Special handling for Basic Authentication to include WWW-Authenticate header
+			if a.authType == "basic" {
+				return createBasicAuthChallengeResponse(result.ErrorCode, result.Message, a.config["realm"].(string))
+			}
 			return createJSONErrorResponse(result.ErrorCode, result.Message)
 		}
 

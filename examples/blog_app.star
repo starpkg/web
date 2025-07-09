@@ -118,14 +118,14 @@ def main():
         <head>
             <title>{} - My Blog</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
-                .post { margin-bottom: 30px; }
-                .meta { color: #666; font-size: 0.9em; margin-bottom: 20px; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                .content { line-height: 1.6; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }}
+                .post {{ margin-bottom: 30px; }}
+                .meta {{ color: #666; font-size: 0.9em; margin-bottom: 20px; }}
+                .nav {{ margin-bottom: 20px; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                .content {{ line-height: 1.6; }}
             </style>
         </head>
         <body>
@@ -268,15 +268,15 @@ def main():
         <head>
             <title>Admin - My Blog</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
-                table { width: 100%; border-collapse: collapse; }
-                th, td { padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }
-                th { background-color: #f2f2f2; }
-                .actions a { margin-right: 10px; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }}
+                .nav {{ margin-bottom: 20px; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
+                table {{ width: 100%; border-collapse: collapse; }}
+                th, td {{ padding: 10px; text-align: left; border-bottom: 1px solid #ddd; }}
+                th {{ background-color: #f2f2f2; }}
+                .actions a {{ margin-right: 10px; }}
             </style>
         </head>
         <body>
@@ -324,16 +324,16 @@ def main():
         <head>
             <title>Edit Post - My Blog</title>
             <style>
-                body { font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }
-                .header { border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }
-                .form-group { margin-bottom: 15px; }
-                .form-group label { display: block; margin-bottom: 5px; font-weight: bold; }
-                .form-group input, .form-group textarea { width: 100%; padding: 8px; border: 1px solid #ccc; }
-                .btn { padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }
-                .btn:hover { background: #0056b3; }
-                .nav { margin-bottom: 20px; }
-                .nav a { margin-right: 20px; color: #007bff; text-decoration: none; }
-                .nav a:hover { text-decoration: underline; }
+                body {{ font-family: Arial, sans-serif; max-width: 800px; margin: 0 auto; padding: 20px; }}
+                .header {{ border-bottom: 1px solid #ccc; padding-bottom: 10px; margin-bottom: 20px; }}
+                .form-group {{ margin-bottom: 15px; }}
+                .form-group label {{ display: block; margin-bottom: 5px; font-weight: bold; }}
+                .form-group input, .form-group textarea {{ width: 100%; padding: 8px; border: 1px solid #ccc; }}
+                .btn {{ padding: 10px 20px; background: #007bff; color: white; border: none; cursor: pointer; }}
+                .btn:hover {{ background: #0056b3; }}
+                .nav {{ margin-bottom: 20px; }}
+                .nav a {{ margin-right: 20px; color: #007bff; text-decoration: none; }}
+                .nav a:hover {{ text-decoration: underline; }}
             </style>
         </head>
         <body>
