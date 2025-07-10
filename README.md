@@ -1,8 +1,8 @@
-# Web Module 🌐
+# 🌐 `web` - Flask-inspired Web Framework for Starlark
 
-[![Go Reference](https://pkg.go.dev/badge/github.com/1set/starpkg/web.svg)](https://pkg.go.dev/github.com/1set/starpkg/web)
-[![Go Report Card](https://goreportcard.com/badge/github.com/1set/starpkg/web)](https://goreportcard.com/report/github.com/1set/starpkg/web)
-[![License](https://img.shields.io/github/license/1set/starpkg)](https://github.com/1set/starpkg/blob/main/LICENSE)
+[![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/web.svg)](https://pkg.go.dev/github.com/starpkg/web)
+[![Go Report Card](https://goreportcard.com/badge/github.com/starpkg/web)](https://goreportcard.com/report/github.com/starpkg/web)
+[![License](https://img.shields.io/github/license/starpkg/web)](https://github.com/starpkg/web/blob/master/LICENSE)
 
 Flask-inspired web framework for building server-side applications in Starlark.
 
@@ -144,6 +144,7 @@ srv.use(logging_middleware(
 ```
 
 **Parameters:**
+
 - `format` (string): Log format template with placeholders:
   - `{remote_addr}`: Client IP address
   - `{method}`: HTTP method
@@ -177,6 +178,7 @@ srv.use(cors_middleware(
 ```
 
 **Parameters:**
+
 - `origins` (list): Allowed origin domains (default: ["*"])
 - `methods` (list): Allowed HTTP methods (default: ["GET", "POST", "PUT", "DELETE", "OPTIONS"])
 - `headers` (list): Allowed request headers (default: ["*"])
@@ -203,6 +205,7 @@ srv.use(compression_middleware(
 ```
 
 **Parameters:**
+
 - `level` (int): Compression level 1-9 (default: 6)
 - `min_size` (int): Minimum response size to compress in bytes (default: 1024)
 - `types` (list): MIME types to compress (default: text/* and application/json)
@@ -230,6 +233,7 @@ srv.use(security_headers_middleware(
 ```
 
 **Parameters:**
+
 - `content_type_options` (string): X-Content-Type-Options header (default: "nosniff")
 - `frame_options` (string): X-Frame-Options header (default: "DENY")
 - `xss_protection` (string): X-XSS-Protection header (default: "1; mode=block")
@@ -258,6 +262,7 @@ srv.use(rate_limiting_middleware(
 ```
 
 **Parameters:**
+
 - `requests_per_minute` (int): Maximum requests per minute (default: 60)
 - `burst_size` (int): Maximum burst requests (default: 10)
 - `window_size` (int): Time window in seconds (default: 60)
@@ -284,6 +289,7 @@ srv.use(timing_middleware(
 ```
 
 **Parameters:**
+
 - `header` (string): Response header name (default: "X-Response-Time")
 - `unit` (string): Time unit ("ms", "s", "us") (default: "ms")
 - `precision` (int): Decimal precision for timing (default: 2)
@@ -308,6 +314,7 @@ srv.use(request_size_middleware(
 ```
 
 **Parameters:**
+
 - `max_body_size` (int): Maximum request body size in bytes (default: 1048576)
 - `max_header_size` (int): Maximum header size in bytes (default: 4096)
 - `max_url_length` (int): Maximum URL length (default: 2048)
@@ -332,6 +339,7 @@ srv.use(recovery_middleware(
 ```
 
 **Parameters:**
+
 - `log_panics` (bool): Log panic details (default: True)
 - `debug_mode` (bool): Include stack trace in response (default: False)
 - `recovery_handler` (function): Custom recovery handler function
@@ -358,6 +366,7 @@ srv.use(caching_middleware(
 ```
 
 **Parameters:**
+
 - `max_age` (int): Cache max-age in seconds (default: 3600)
 - `private` (bool): Set cache as private (default: False)
 - `no_cache` (bool): Set no-cache directive (default: False)
