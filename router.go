@@ -3,517 +3,205 @@ package web
 import (
 	"fmt"
 	"net/http"
-	"os"
-	"path/filepath"
 	"regexp"
-	"strings"
 
-	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
+	"github.com/gin-gonic/gin"
 	"go.starlark.net/starlark"
-	"go.starlark.net/starlarkstruct"
 )
 
-// Router handles HTTP routing
-type Router struct {
-	routes       map[string]*RouteTree
-	staticRoutes map[string]*StaticRoute
-	paramRegex   *regexp.Regexp
-	server       *Server // Add reference to server for error handling
+// Ensure RouteGroupWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*RouteGroupWrapper)(nil)
+	_ starlark.HasAttrs = (*RouteGroupWrapper)(nil)
+)
+
+// HTTPMethod represents the supported HTTP methods
+type HTTPMethod string
+
+const (
+	MethodGet     HTTPMethod = http.MethodGet
+	MethodPost    HTTPMethod = http.MethodPost
+	MethodPut     HTTPMethod = http.MethodPut
+	MethodDelete  HTTPMethod = http.MethodDelete
+	MethodPatch   HTTPMethod = http.MethodPatch
+	MethodOptions HTTPMethod = http.MethodOptions
+	MethodHead    HTTPMethod = http.MethodHead
+)
+
+// RouteRegistrar defines the interface for registering routes
+type RouteRegistrar interface {
+	RegisterRoute(method HTTPMethod, path string, handler gin.HandlerFunc) error
 }
 
-// RouteTree represents a route tree for efficient matching
-type RouteTree struct {
-	exact     map[string]HandlerFunc
-	param     map[string]*RouteTree
-	wildcard  HandlerFunc
-	paramName string
-}
-
-// StaticRoute represents a static file route
-type StaticRoute struct {
-	URLPath   string
-	Directory string
-	Index     string
-}
-
-// SPARoute represents a Single Page Application route
-type SPARoute struct {
-	URLPath   string
-	Directory string
-	Fallback  string
-}
-
-// HandlerFunc represents a route handler function
-type HandlerFunc func(*Request) *Response
-
-// MiddlewareFunc represents a middleware function
-type MiddlewareFunc func(*Request, NextFunc) *Response
-
-// NextFunc represents the next function in middleware chain
-type NextFunc func(*Request) *Response
-
-// RouteGroup represents a group of routes with a common prefix
+// RouteGroup represents a group of routes with a common prefix.
+// This structure provides a way to organize related routes together
+// and apply common middleware or configuration to them.
 type RouteGroup struct {
-	server *Server
-	prefix string
-
-	// Embedded route registrar for consistent route registration
-	*routeRegistrarImpl
+	prefix   string
+	server   *Server
+	ginGroup *gin.RouterGroup
 }
 
-// NewRouter creates a new router instance
-func NewRouter() *Router {
-	return &Router{
-		routes:       make(map[string]*RouteTree),
-		staticRoutes: make(map[string]*StaticRoute),
-		paramRegex:   regexp.MustCompile(`\{([^}]+)\}`),
-		server:       nil, // Will be set by server
+// RegisterRoute implements RouteRegistrar for RouteGroup
+func (rg *RouteGroup) RegisterRoute(method HTTPMethod, path string, handler gin.HandlerFunc) error {
+	ginPath := convertPathParams(path)
+
+	switch method {
+	case MethodGet:
+		rg.ginGroup.GET(ginPath, handler)
+	case MethodPost:
+		rg.ginGroup.POST(ginPath, handler)
+	case MethodPut:
+		rg.ginGroup.PUT(ginPath, handler)
+	case MethodDelete:
+		rg.ginGroup.DELETE(ginPath, handler)
+	case MethodPatch:
+		rg.ginGroup.PATCH(ginPath, handler)
+	case MethodOptions:
+		rg.ginGroup.OPTIONS(ginPath, handler)
+	case MethodHead:
+		rg.ginGroup.HEAD(ginPath, handler)
+	default:
+		return fmt.Errorf("unsupported HTTP method: %s", method)
 	}
+
+	return nil
 }
 
-// SetServer sets the server reference for error handling
-func (router *Router) SetServer(server *Server) {
-	router.server = server
+// addRoute adds a route to the gin group using the server's handler wrapper
+func (rg *RouteGroup) addRoute(method HTTPMethod, path string, handler starlark.Callable) error {
+	ginHandler := rg.server.wrapHandler(handler)
+	return rg.RegisterRoute(method, path, ginHandler)
 }
 
-// AddRoute registers a new route
-func (router *Router) AddRoute(method, path string, handler starlark.Callable) {
-	// Get or create route tree for method
-	tree, exists := router.routes[method]
-	if !exists {
-		tree = &RouteTree{
-			exact: make(map[string]HandlerFunc),
-			param: make(map[string]*RouteTree),
-		}
-		router.routes[method] = tree
-	}
-
-	// Wrap Starlark callable as HandlerFunc
-	handlerFunc := func(req *Request) *Response {
-		// Call the handler
-		reqValue := req.Struct()
-
-		result, err := starlark.Call(&starlark.Thread{}, handler, starlark.Tuple{reqValue}, nil)
-		if err != nil {
-			return &Response{
-				StatusCode: 500,
-				Headers:    make(map[string][]string),
-				Body:       fmt.Sprintf("Handler error: %v", err),
-			}
-		}
-
-		// Try to convert result to Response - first try ResponseFromStarlarkStruct
-		if resp, err := ResponseFromStarlarkStruct(result); err == nil {
-			return resp
-		}
-
-		// Then try direct conversion using dataconv.Unmarshal
-		if goValue, err := dataconv.Unmarshal(result); err == nil {
-			if resp, ok := goValue.(*Response); ok {
-				return resp
-			}
-		}
-
-		// Finally, try convert.FromValue as fallback
-		goValue := convert.FromValue(result)
-		if resp, ok := goValue.(*Response); ok {
-			return resp
-		}
-
-		return &Response{
-			StatusCode: 500,
-			Headers:    make(map[string][]string),
-			Body:       fmt.Sprintf("Handler did not return a Response object, got %T", goValue),
-		}
-	}
-
-	// Add route to tree
-	router.addToTree(tree, path, handlerFunc)
+// HTTP method handlers for RouteGroup
+func (rg *RouteGroup) Get(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodGet, path, handler)
 }
 
-// AddStaticRoute registers a static file route
-func (router *Router) AddStaticRoute(urlPath, directory, index string) {
-	router.staticRoutes[urlPath] = &StaticRoute{
-		URLPath:   urlPath,
-		Directory: directory,
-		Index:     index,
-	}
+func (rg *RouteGroup) Post(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodPost, path, handler)
 }
 
-// AddSPARoute registers a Single Page Application route
-func (router *Router) AddSPARoute(urlPath, directory, fallback string) {
-	// Add handler for the SPA route
-	handlerFunc := func(req *Request) *Response {
-		// Get path relative to the URL path
-		path := req.Request.URL.Path
-
-		// Strip the URL path prefix
-		if strings.HasPrefix(path, urlPath) {
-			path = strings.TrimPrefix(path, urlPath)
-		}
-
-		// Ensure path starts with /
-		if !strings.HasPrefix(path, "/") {
-			path = "/" + path
-		}
-
-		// Try to serve the file
-		filePath := filepath.Join(directory, path)
-		if _, err := os.Stat(filePath); err == nil {
-			// File exists, serve it
-			return &Response{
-				StatusCode: http.StatusOK,
-				Headers:    make(http.Header),
-				FilePath:   filePath,
-			}
-		}
-
-		// File not found, serve the fallback
-		fallbackPath := filepath.Join(directory, fallback)
-		return &Response{
-			StatusCode: http.StatusOK,
-			Headers:    make(http.Header),
-			FilePath:   fallbackPath,
-		}
-	}
-
-	// Add a wildcard route for the SPA
-	tree, exists := router.routes["GET"]
-	if !exists {
-		tree = &RouteTree{
-			exact: make(map[string]HandlerFunc),
-			param: make(map[string]*RouteTree),
-		}
-		router.routes["GET"] = tree
-	}
-
-	// Add the SPA handler for the URL path and all sub-paths
-	spaPath := strings.TrimSuffix(urlPath, "/") + "/{*path}"
-	router.addToTree(tree, spaPath, handlerFunc)
+func (rg *RouteGroup) Put(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodPut, path, handler)
 }
 
-// addToTree adds a route to the route tree
-func (router *Router) addToTree(tree *RouteTree, path string, handler HandlerFunc) {
-	segments := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segments) == 1 && segments[0] == "" {
-		segments = []string{} // Root path
-	}
-
-	current := tree
-	for i, segment := range segments {
-		if segment == "" {
-			continue
-		}
-
-		// Check for parameter
-		if strings.HasPrefix(segment, "{") && strings.HasSuffix(segment, "}") {
-			paramName := segment[1 : len(segment)-1]
-
-			// Handle wildcard parameters (e.g., {*filepath})
-			if strings.HasPrefix(paramName, "*") {
-				if i == len(segments)-1 { // Must be last segment
-					current.wildcard = handler
-					return
-				}
-				panic("Wildcard parameter must be the last segment")
-			}
-
-			// Regular parameter
-			if current.param[paramName] == nil {
-				current.param[paramName] = &RouteTree{
-					exact:     make(map[string]HandlerFunc),
-					param:     make(map[string]*RouteTree),
-					paramName: paramName,
-				}
-			}
-			current = current.param[paramName]
-		} else {
-			// Exact match segment
-			if current.param[segment] == nil {
-				current.param[segment] = &RouteTree{
-					exact: make(map[string]HandlerFunc),
-					param: make(map[string]*RouteTree),
-				}
-			}
-			current = current.param[segment]
-		}
-	}
-
-	// Set handler at final node
-	current.exact[""] = handler
+func (rg *RouteGroup) Delete(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodDelete, path, handler)
 }
 
-// ServeHTTP implements the routing logic
-func (router *Router) ServeHTTP(req *Request) *Response {
-	method := req.Request.Method
-	path := req.Request.URL.Path
-
-	// Check static routes first
-	for urlPath, staticRoute := range router.staticRoutes {
-		if strings.HasPrefix(path, urlPath) {
-			return router.serveStatic(req, staticRoute, path)
-		}
-	}
-
-	// Check dynamic routes
-	tree, exists := router.routes[method]
-	if !exists {
-		// Check if the path exists for any other method
-		if router.pathExistsForOtherMethods(path, method) {
-			return router.createErrorResponse(req, 405, "Method Not Allowed")
-		}
-		return router.createErrorResponse(req, 404, "Not Found")
-	}
-
-	handler, params := router.matchRoute(tree, path)
-	if handler == nil {
-		// Check if the path exists for any other method
-		if router.pathExistsForOtherMethods(path, method) {
-			return router.createErrorResponse(req, 405, "Method Not Allowed")
-		}
-		return router.createErrorResponse(req, 404, "Not Found")
-	}
-
-	// Set path parameters
-	for name, value := range params {
-		req.SetParam(name, value)
-	}
-
-	return handler(req)
+func (rg *RouteGroup) Patch(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodPatch, path, handler)
 }
 
-// matchRoute finds a matching route and extracts parameters
-func (router *Router) matchRoute(tree *RouteTree, path string) (HandlerFunc, map[string]string) {
-	segments := strings.Split(strings.Trim(path, "/"), "/")
-	if len(segments) == 1 && segments[0] == "" {
-		segments = []string{} // Root path
-	}
-
-	params := make(map[string]string)
-	return router.matchSegments(tree, segments, 0, params)
+func (rg *RouteGroup) Options(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodOptions, path, handler)
 }
 
-// matchSegments recursively matches path segments
-func (router *Router) matchSegments(tree *RouteTree, segments []string, index int, params map[string]string) (HandlerFunc, map[string]string) {
-	// If we've consumed all segments, check for exact match
-	if index >= len(segments) {
-		if handler, exists := tree.exact[""]; exists {
-			return handler, params
-		}
-		return nil, nil
-	}
-
-	segment := segments[index]
-
-	// Try exact match first
-	if nextTree, exists := tree.param[segment]; exists {
-		if handler, foundParams := router.matchSegments(nextTree, segments, index+1, params); handler != nil {
-			return handler, foundParams
-		}
-	}
-
-	// Try parameter matches
-	for paramName, nextTree := range tree.param {
-		if nextTree.paramName != "" {
-			// Regular parameter
-			newParams := make(map[string]string)
-			for k, v := range params {
-				newParams[k] = v
-			}
-			newParams[paramName] = segment
-
-			if handler, foundParams := router.matchSegments(nextTree, segments, index+1, newParams); handler != nil {
-				return handler, foundParams
-			}
-		}
-	}
-
-	// Try wildcard match
-	if tree.wildcard != nil {
-		// Collect remaining segments for wildcard
-		remaining := strings.Join(segments[index:], "/")
-		if tree.paramName != "" {
-			params[tree.paramName] = remaining
-		}
-		return tree.wildcard, params
-	}
-
-	return nil, nil
+func (rg *RouteGroup) Head(path string, handler starlark.Callable) error {
+	return rg.addRoute(MethodHead, path, handler)
 }
 
-// serveStatic serves static files
-func (router *Router) serveStatic(req *Request, staticRoute *StaticRoute, requestPath string) *Response {
-	// Remove URL prefix to get file path
-	filePath := strings.TrimPrefix(requestPath, staticRoute.URLPath)
-	if filePath == "" || filePath == "/" {
-		filePath = staticRoute.Index
+// convertPathParams converts path parameters from {param} format to :param format.
+// This function transforms Flask-style path parameters to Gin-compatible format.
+func convertPathParams(path string) string {
+	// Use regex to replace {param} with :param
+	re := regexp.MustCompile(`\{([^}]+)\}`)
+	return re.ReplaceAllString(path, ":$1")
+}
+
+// RouteGroupWrapper wraps the RouteGroup struct to provide Starlark-compatible method names.
+// This wrapper exposes route group methods to Starlark scripts with lowercase names
+// that match the expected API conventions.
+type RouteGroupWrapper struct {
+	group       *RouteGroup
+	methodMap   map[string]httpMethodInfo
+	methodNames []string
+}
+
+// NewRouteGroupWrapper creates a new RouteGroupWrapper with initialized method map
+func NewRouteGroupWrapper(group *RouteGroup) *RouteGroupWrapper {
+	methods := []httpMethodInfo{
+		{"get", MethodGet, group.Get},
+		{"post", MethodPost, group.Post},
+		{"put", MethodPut, group.Put},
+		{"delete", MethodDelete, group.Delete},
+		{"patch", MethodPatch, group.Patch},
+		{"options", MethodOptions, group.Options},
+		{"head", MethodHead, group.Head},
 	}
 
-	// Prevent directory traversal
-	if strings.Contains(filePath, "..") {
-		return router.createErrorResponse(req, 403, "Forbidden")
+	methodMap := make(map[string]httpMethodInfo, len(methods))
+	methodNames := make([]string, len(methods))
+
+	for i, method := range methods {
+		methodMap[method.name] = method
+		methodNames[i] = method.name
 	}
 
-	// Build full file path
-	fullPath := filepath.Join(staticRoute.Directory, filePath)
-
-	// Check if file exists and is readable
-	if stat, err := os.Stat(fullPath); err != nil {
-		// File doesn't exist or can't be accessed
-		return router.createErrorResponse(req, 404, "Not Found")
-	} else if stat.IsDir() {
-		// If it's a directory, try to serve index file
-		indexPath := filepath.Join(fullPath, staticRoute.Index)
-		if _, err := os.Stat(indexPath); err != nil {
-			return router.createErrorResponse(req, 404, "Not Found")
-		}
-		fullPath = indexPath
-	}
-
-	// Return file response
-	return &Response{
-		StatusCode: 200,
-		Headers:    make(http.Header),
-		FilePath:   fullPath,
+	return &RouteGroupWrapper{
+		group:       group,
+		methodMap:   methodMap,
+		methodNames: methodNames,
 	}
 }
 
-// NewRouteGroup creates a new route group
-func NewRouteGroup(server *Server, prefix string) *RouteGroup {
-	// Ensure prefix starts with a / and doesn't end with one
-	if !strings.HasPrefix(prefix, "/") {
-		prefix = "/" + prefix
-	}
-	prefix = strings.TrimSuffix(prefix, "/")
-
-	return &RouteGroup{
-		server: server,
-		prefix: prefix,
-		// Initialize the embedded route registrar with prefix path transformer
-		routeRegistrarImpl: newRouteRegistrarImpl(server.router, prefixPathTransformer(prefix)),
-	}
+// String returns a string representation of the RouteGroupWrapper.
+func (rgw *RouteGroupWrapper) String() string {
+	return fmt.Sprintf("<web.RouteGroup prefix=%s>", rgw.group.prefix)
 }
 
-// Struct returns a Starlark struct representation of the RouteGroup
-func (rg *RouteGroup) Struct() *starlarkstruct.Struct {
-	// Start with the base structure
-	sd := starlark.StringDict{
-		"route":  starlark.NewBuiltin("route", rg.Route),
-		"use":    starlark.NewBuiltin("use", rg.Use),
-		"static": starlark.NewBuiltin("static", rg.Static),
-	}
-
-	// Add HTTP method registration builtins using the shared factory
-	routeBuiltins := createRouteBuiltins(rg)
-	for name, builtin := range routeBuiltins {
-		sd[name] = builtin
-	}
-
-	return starlarkstruct.FromStringDict(starlark.String("RouteGroup"), sd)
+// Type returns the Starlark type name for this object.
+func (rgw *RouteGroupWrapper) Type() string {
+	return "web.RouteGroup"
 }
 
-// Route registers a route with the group
-func (rg *RouteGroup) Route(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		method  starlark.Value
-		path    starlark.String
-		handler starlark.Callable
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"method", &method,
-		"path", &path,
-		"handler", &handler,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	// Prepend prefix to path
-	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(path.GoString(), "/"))
-
-	// Call the server's Route method
-	_, err := rg.server.Route(thread, b, starlark.Tuple{method, fullPath, handler}, nil)
-	if err != nil {
-		return starlark.None, err
-	}
-
-	return starlark.None, nil
+// Freeze makes this object immutable.
+func (rgw *RouteGroupWrapper) Freeze() {
+	// RouteGroup is immutable after creation
 }
 
-// HTTP method registration methods are now provided by the embedded routeRegistrarImpl
-// These methods automatically handle prefix addition and eliminate code duplication
-
-// Use adds middleware to the route group
-func (rg *RouteGroup) Use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var middlewareFunc starlark.Callable
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "middleware", &middlewareFunc); err != nil {
-		return starlark.None, err
-	}
-
-	// Create path pattern for this group
-	pattern := rg.prefix + "/*"
-
-	// Call server's UseFor method
-	pathPattern := starlark.String(pattern)
-	_, err := rg.server.UseFor(thread, b, starlark.Tuple{pathPattern, middlewareFunc}, nil)
-	if err != nil {
-		return starlark.None, err
-	}
-
-	return starlark.None, nil
+// Truth returns the truth value of this object.
+func (rgw *RouteGroupWrapper) Truth() starlark.Bool {
+	return starlark.True
 }
 
-// Static adds a static file route
-func (rg *RouteGroup) Static(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		urlPath   starlark.String
-		directory starlark.String
-		index     = starlark.String("index.html")
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"url_path", &urlPath,
-		"directory", &directory,
-		"index?", &index,
-	); err != nil {
-		return starlark.None, err
-	}
-
-	// Prepend prefix to path
-	fullPath := starlark.String(rg.prefix + "/" + strings.TrimPrefix(urlPath.GoString(), "/"))
-
-	// Call server's Static method
-	_, err := rg.server.Static(thread, b, starlark.Tuple{fullPath, directory, index}, nil)
-	if err != nil {
-		return starlark.None, err
-	}
-
-	return starlark.None, nil
+// Hash returns a hash value for this object.
+func (rgw *RouteGroupWrapper) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", rgw.Type())
 }
 
-// createErrorResponse creates an error response, using custom error handlers if available
-func (router *Router) createErrorResponse(req *Request, statusCode int, defaultMessage string) *Response {
-	// If we have a server reference and it has custom error handlers, use them
-	if router.server != nil {
-		if errorHandler, exists := router.server.errorHandlers[statusCode]; exists {
-			return errorHandler(req)
+// httpMethodInfo holds information about HTTP methods for dynamic registration
+type httpMethodInfo struct {
+	name    string
+	method  HTTPMethod
+	handler func(path string, handler starlark.Callable) error
+}
+
+// createHTTPMethodBuiltin creates a Starlark builtin for an HTTP method
+func (rgw *RouteGroupWrapper) createHTTPMethodBuiltin(methodInfo httpMethodInfo) starlark.Value {
+	return starlark.NewBuiltin(methodInfo.name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+		var path string
+		var handler starlark.Callable
+		if err := starlark.UnpackArgs(b.Name(), args, kwargs, "path", &path, "handler", &handler); err != nil {
+			return nil, err
 		}
-	}
-
-	// Fall back to default error response using helper
-	return createErrorResponse(statusCode, defaultMessage)
+		return starlark.None, methodInfo.handler(path, handler)
+	})
 }
 
-// pathExistsForOtherMethods checks if the path exists for any other method
-func (router *Router) pathExistsForOtherMethods(path, method string) bool {
-	for otherMethod, tree := range router.routes {
-		if otherMethod != method {
-			if handler, _ := router.matchRoute(tree, path); handler != nil {
-				return true
-			}
-		}
+// Attr returns the value of the named attribute using efficient map lookup.
+func (rgw *RouteGroupWrapper) Attr(name string) (starlark.Value, error) {
+	// Check for HTTP method attributes using map lookup
+	if methodInfo, exists := rgw.methodMap[name]; exists {
+		return rgw.createHTTPMethodBuiltin(methodInfo), nil
 	}
-	return false
+
+	return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rgw.Type(), name))
+}
+
+// AttrNames returns the names of all attributes.
+func (rgw *RouteGroupWrapper) AttrNames() []string {
+	return rgw.methodNames
 }

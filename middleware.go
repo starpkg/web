@@ -5,579 +5,570 @@ import (
 	"compress/gzip"
 	"fmt"
 	"net/http"
-	"regexp"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
 )
 
-// Middleware types and functions
+// Ensure MiddlewareWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value    = (*MiddlewareWrapper)(nil)
+	_ starlark.HasAttrs = (*MiddlewareWrapper)(nil)
+)
 
-// pathPattern represents a pattern for path-specific middleware
-type pathPattern struct {
-	pattern string
-	regex   *regexp.Regexp
+// MiddlewareFunc represents a middleware function
+type MiddlewareFunc func(*Request, NextFunc) *Response
+
+// NextFunc represents the next handler in the middleware chain
+type NextFunc func(*Request) *Response
+
+// MiddlewareWrapper wraps a middleware function for Starlark
+type MiddlewareWrapper struct {
+	middleware MiddlewareFunc
 }
 
-// newPathPattern creates a new path pattern for middleware matching
-func newPathPattern(pattern string) (*pathPattern, error) {
-	// Convert wildcard patterns to regex
-	regexStr := "^"
-	if strings.HasSuffix(pattern, "/*") {
-		// Handle /path/* wildcard
-		regexStr += strings.Replace(pattern, "/*", "(/.*)?", 1)
-	} else if strings.HasSuffix(pattern, "*") {
-		// Handle path* wildcard
-		regexStr += strings.Replace(pattern, "*", ".*", 1)
-	} else {
-		// Handle exact path match
-		regexStr += pattern
-	}
-	regexStr += "$"
-
-	regex, err := regexp.Compile(regexStr)
-	if err != nil {
-		return nil, err
-	}
-
-	return &pathPattern{
-		pattern: pattern,
-		regex:   regex,
-	}, nil
+// NewMiddlewareWrapper creates a new middleware wrapper
+func NewMiddlewareWrapper(middleware MiddlewareFunc) *MiddlewareWrapper {
+	return &MiddlewareWrapper{middleware: middleware}
 }
 
-// matches checks if a path matches the pattern
-func (p *pathPattern) matches(path string) bool {
-	return p.regex.MatchString(path)
+// String returns string representation
+func (mw *MiddlewareWrapper) String() string {
+	return "<web.Middleware>"
 }
 
-// applyMiddleware applies a middleware to the handler chain
-func applyMiddleware(handler HandlerFunc, middleware MiddlewareFunc) HandlerFunc {
-	return func(req *Request) *Response {
-		// Convert handler to NextFunc
-		nextFunc := func(r *Request) *Response {
-			return handler(r)
-		}
-		return middleware(req, nextFunc)
-	}
+// Type returns the Starlark type name
+func (mw *MiddlewareWrapper) Type() string {
+	return "web.Middleware"
 }
 
-// callStarlarkMiddleware calls a Starlark middleware function
-func callStarlarkMiddleware(thread *starlark.Thread, middleware starlark.Callable, req *Request, next NextFunc) (*Response, error) {
-	// Convert request to Starlark
-	reqValue := req.Struct()
+// Freeze makes the object immutable
+func (mw *MiddlewareWrapper) Freeze() {}
 
-	// Create a Starlark function for the next handler
-	nextFunc := starlark.NewBuiltin("next", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		if len(args) > 0 {
-			// If args are provided, the middleware is modifying the request
-			modifiedReq, err := dataconv.Unmarshal(args[0])
-			if err != nil {
-				return starlark.None, fmt.Errorf("invalid request object passed to next: %v", err)
-			}
-
-			if modReq, ok := modifiedReq.(*Request); ok {
-				response := next(modReq)
-				respValue := response.Struct()
-				return respValue, nil
-			}
-			return starlark.None, fmt.Errorf("invalid request object type")
-		}
-
-		// Default: call next with original request
-		response := next(req)
-		respValue := response.Struct()
-		return respValue, nil
-	})
-
-	// Call the middleware with request and next function
-	result, err := starlark.Call(thread, middleware, starlark.Tuple{reqValue, nextFunc}, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	// Convert result back to Response
-	respObj, err := ResponseFromStarlarkStruct(result)
-	if err != nil {
-		// Try normal unmarshaling as fallback
-		goValue, err := dataconv.Unmarshal(result)
-		if err != nil {
-			return nil, fmt.Errorf("failed to unmarshal response: %v", err)
-		}
-
-		if resp, ok := goValue.(*Response); ok {
-			respObj = resp
-		} else {
-			return nil, fmt.Errorf("handler did not return a Response object")
-		}
-	}
-
-	return respObj, nil
+// Truth returns the truth value
+func (mw *MiddlewareWrapper) Truth() starlark.Bool {
+	return starlark.True
 }
 
-// wrapStarlarkMiddleware wraps a Starlark middleware function
-func wrapStarlarkMiddleware(middleware starlark.Callable) MiddlewareFunc {
+// Hash returns a hash value
+func (mw *MiddlewareWrapper) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", mw.Type())
+}
+
+// Attr returns the named attribute (none for now)
+func (mw *MiddlewareWrapper) Attr(name string) (starlark.Value, error) {
+	return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", mw.Type(), name))
+}
+
+// AttrNames returns available attributes
+func (mw *MiddlewareWrapper) AttrNames() []string {
+	return []string{}
+}
+
+// Execute runs the middleware function
+func (mw *MiddlewareWrapper) Execute(req *Request, next NextFunc) *Response {
+	return mw.middleware(req, next)
+}
+
+// createStarlarkMiddleware creates a middleware from a Starlark function
+func createStarlarkMiddleware(middlewareFunc starlark.Callable) MiddlewareFunc {
 	return func(req *Request, next NextFunc) *Response {
-		resp, err := callStarlarkMiddleware(&starlark.Thread{}, middleware, req, next)
+		// Create request wrapper
+		reqWrapper := NewRequestWrapper(req)
+
+		// Create next function wrapper
+		nextWrapper := starlark.NewBuiltin("next", func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+			var requestArg starlark.Value
+			if err := starlark.UnpackArgs(b.Name(), args, kwargs, "request", &requestArg); err != nil {
+				return nil, err
+			}
+
+			// Call the actual next function
+			response := next(req)
+
+			// Return response wrapper
+			return NewResponseWrapper(response), nil
+		})
+
+		// Call middleware function
+		thread := &starlark.Thread{Name: "middleware"}
+		args := starlark.Tuple{reqWrapper, nextWrapper}
+		result, err := starlark.Call(thread, middlewareFunc, args, nil)
 		if err != nil {
-			// If middleware execution fails, return an error response using helper
-			return InternalServerError(fmt.Sprintf("Middleware error: %v", err))
+			// Return error response
+			return createJSONErrorResponse(500, fmt.Sprintf("Middleware error: %s", err.Error()))
 		}
-		return resp
+
+		// Convert result back to Response
+		if respWrapper, ok := result.(*ResponseWrapper); ok {
+			return respWrapper.response
+		}
+
+		// If not a response wrapper, return error
+		return createJSONErrorResponse(500, "Middleware must return a response")
 	}
-}
-
-// middlewareFactory creates a standardized middleware builtin with consistent error handling
-// This eliminates the ~100 lines of repetitive code in each middleware function
-func middlewareFactory(name string, middlewareFunc MiddlewareFunc) *starlark.Builtin {
-	return starlark.NewBuiltin(name, func(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-		var req, nextHandler starlark.Value
-
-		if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-			"request", &req,
-			"next_handler", &nextHandler,
-		); err != nil {
-			return none, err
-		}
-
-		// Convert request to Go type
-		goReq, err := dataconv.Unmarshal(req)
-		if err != nil {
-			return none, fmt.Errorf("invalid request object: %v", err)
-		}
-
-		request, ok := goReq.(*Request)
-		if !ok {
-			return none, fmt.Errorf("expected Request, got %T", goReq)
-		}
-
-		// Create next_handler wrapper
-		nextFunc := func(r *Request) *Response {
-			// Call the Starlark next_handler
-			result, err := starlark.Call(thread, nextHandler.(starlark.Callable), starlark.Tuple{req}, nil)
-			if err != nil {
-				return InternalServerError(fmt.Sprintf("Next handler error: %v", err))
-			}
-
-			// Convert result to Response
-			respObj, err := ResponseFromStarlarkStruct(result)
-			if err != nil {
-				// Try normal unmarshaling as fallback
-				goValue, err := dataconv.Unmarshal(result)
-				if err != nil {
-					return InternalServerError(fmt.Sprintf("Invalid response from next handler: %v", err))
-				}
-
-				if resp, ok := goValue.(*Response); ok {
-					return resp
-				}
-
-				return InternalServerError("Next handler returned invalid response type")
-			}
-
-			return respObj
-		}
-
-		// Call the actual middleware function
-		response := middlewareFunc(request, nextFunc)
-
-		// Convert response back to Starlark
-		result := response.Struct()
-
-		return result, nil
-	})
 }
 
 // Built-in middleware functions
 
 // corsMiddleware creates a CORS middleware
-func corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		origins     *starlark.List
-		methods     *starlark.List
-		headers     *starlark.List
-		credentials = starlark.Bool(false)
-		maxAge      = starlark.MakeInt(86400)
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"origins?", &origins,
-		"methods?", &methods,
-		"headers?", &headers,
-		"credentials?", &credentials,
-		"max_age?", &maxAge,
-	); err != nil {
-		return none, err
+func corsMiddleware(origins []string, methods []string, headers []string, credentials bool) MiddlewareFunc {
+	if len(origins) == 0 {
+		origins = []string{"*"}
+	}
+	if len(methods) == 0 {
+		methods = []string{"GET", "POST", "PUT", "DELETE", "PATCH", "OPTIONS", "HEAD"}
+	}
+	if len(headers) == 0 {
+		headers = []string{HeaderContentType, HeaderAuthorization}
 	}
 
-	// Convert origins to Go slice using helper
-	var originsSlice []string
-	if origins != nil {
-		originsSlice = starlarkListToStringSlice(origins)
-	} else {
-		originsSlice = []string{"*"}
-	}
-
-	// Convert methods to Go slice using helper
-	var methodsSlice []string
-	if methods != nil {
-		methodsSlice = starlarkListToStringSlice(methods)
-	} else {
-		methodsSlice = []string{"GET", "POST", "PUT", "DELETE", "OPTIONS", "HEAD"}
-	}
-
-	// Convert headers to Go slice using helper
-	var headersSlice []string
-	if headers != nil {
-		headersSlice = starlarkListToStringSlice(headers)
-	} else {
-		headersSlice = []string{"Content-Type", "Authorization"}
-	}
-
-	maxAgeInt, _ := maxAge.Int64()
-
-	// Create the actual middleware function
-	corsMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Check if this is a preflight request
-		if req.Request.Method == "OPTIONS" {
-			// Handle preflight request
-			resp := &Response{
-				StatusCode: 200,
-				Headers:    make(http.Header),
-				Body:       "",
+	return func(req *Request, next NextFunc) *Response {
+		// Handle preflight requests
+		if req.Method == http.MethodOptions {
+			return &Response{
+				StatusCode: 204,
+				Headers: map[string]string{
+					canonicalHeader(HeaderAccessControlAllowOrigin):      strings.Join(origins, ", "),
+					canonicalHeader(HeaderAccessControlAllowMethods):     strings.Join(methods, ", "),
+					canonicalHeader(HeaderAccessControlAllowHeaders):     strings.Join(headers, ", "),
+					canonicalHeader(HeaderAccessControlAllowCredentials): fmt.Sprintf("%t", credentials),
+				},
+				Body: "",
 			}
-
-			// Set CORS headers
-			resp.Headers["Access-Control-Allow-Origin"] = []string{strings.Join(originsSlice, ", ")}
-			resp.Headers["Access-Control-Allow-Methods"] = []string{strings.Join(methodsSlice, ", ")}
-			resp.Headers["Access-Control-Allow-Headers"] = []string{strings.Join(headersSlice, ", ")}
-			resp.Headers["Access-Control-Max-Age"] = []string{fmt.Sprintf("%d", maxAgeInt)}
-
-			if credentials {
-				resp.Headers["Access-Control-Allow-Credentials"] = []string{"true"}
-			}
-
-			return resp
 		}
 
-		// Process normal request
-		resp := next(req)
+		// Process normal requests
+		response := next(req)
 
 		// Add CORS headers to response
-		if resp.Headers == nil {
-			resp.Headers = make(http.Header)
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
 		}
-
-		resp.Headers["Access-Control-Allow-Origin"] = []string{strings.Join(originsSlice, ", ")}
-
+		response.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)] = strings.Join(origins, ", ")
 		if credentials {
-			resp.Headers["Access-Control-Allow-Credentials"] = []string{"true"}
+			response.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
 		}
 
-		return resp
+		return response
 	}
-
-	// Use the middleware factory to create the builtin
-	return middlewareFactory("cors_middleware", corsMiddlewareFunc), nil
 }
 
 // loggingMiddleware creates a logging middleware
-func loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		format     = starlark.String("{method} {path} {status} {duration}")
-		skipPaths  *starlark.List
-		skipStatus *starlark.List
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"format?", &format,
-		"skip_paths?", &skipPaths,
-		"skip_status?", &skipStatus,
-	); err != nil {
-		return none, err
+func loggingMiddleware(format string) MiddlewareFunc {
+	if format == "" {
+		format = "{method} {path} {status} {duration}ms"
 	}
 
-	// Convert skip paths to Go slice using helper
-	var skipPathsSlice []string
-	if skipPaths != nil {
-		skipPathsSlice = starlarkListToStringSlice(skipPaths)
+	return func(req *Request, next NextFunc) *Response {
+		start := time.Now()
+
+		response := next(req)
+
+		duration := time.Since(start)
+
+		logLine := format
+		logLine = strings.ReplaceAll(logLine, "{method}", req.Method)
+		logLine = strings.ReplaceAll(logLine, "{path}", req.Path)
+		logLine = strings.ReplaceAll(logLine, "{status}", fmt.Sprintf("%d", response.StatusCode))
+		logLine = strings.ReplaceAll(logLine, "{duration}", fmt.Sprintf("%.2f", float64(duration.Nanoseconds())/1e6))
+
+		fmt.Println(logLine)
+
+		return response
+	}
+}
+
+// securityHeadersMiddleware adds security headers
+func securityHeadersMiddleware(config map[string]string) MiddlewareFunc {
+	return func(req *Request, next NextFunc) *Response {
+		response := next(req)
+
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+
+		// Add security headers
+		for header, value := range config {
+			response.Headers[canonicalHeader(header)] = value
+		}
+
+		return response
+	}
+}
+
+// timingMiddleware adds response time header
+func timingMiddleware(header string) MiddlewareFunc {
+	if header == "" {
+		header = HeaderXResponseTime
 	}
 
-	// Convert skip status to Go slice using helper
-	var skipStatusSlice []int
-	if skipStatus != nil {
-		skipStatusSlice = starlarkListToIntSlice(skipStatus)
+	return func(req *Request, next NextFunc) *Response {
+		start := time.Now()
+
+		response := next(req)
+
+		duration := time.Since(start)
+
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+		response.Headers[canonicalHeader(header)] = fmt.Sprintf("%.3fms", float64(duration)/float64(time.Millisecond))
+
+		return response
 	}
+}
 
-	formatStr := format.GoString()
-
-	// Create the actual middleware function
-	loggingMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Check if path should be skipped
-		for _, skipPath := range skipPathsSlice {
-			if strings.HasPrefix(req.Request.URL.Path, skipPath) {
-				return next(req)
+// jsonMiddleware parses JSON bodies and sets JSON content type
+func jsonMiddleware() MiddlewareFunc {
+	return func(req *Request, next NextFunc) *Response {
+		// Parse JSON if content type is application/json
+		if req.Headers[canonicalHeader(HeaderContentType)] == MIMEApplicationJSON && len(req.bodyData) > 0 {
+			// Try to parse JSON and store in context
+			if jsonValue, err := dataconv.DecodeStarlarkJSON(req.bodyData); err == nil {
+				if jsonData, err := dataconv.Unmarshal(jsonValue); err == nil {
+					req.Context["json_data"] = jsonData
+				}
 			}
 		}
 
-		// Start timer
-		start := time.Now()
+		response := next(req)
 
-		// Process request
-		resp := next(req)
+		// Set JSON content type for JSON responses
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
 
-		// Check if status should be skipped
-		for _, skipStat := range skipStatusSlice {
-			if resp.StatusCode == skipStat {
-				return resp
+		// Check if response body looks like JSON, and set content type if so
+		body := strings.TrimSpace(response.Body)
+		if (strings.HasPrefix(body, "{") && strings.HasSuffix(body, "}")) ||
+			(strings.HasPrefix(body, "[") && strings.HasSuffix(body, "]")) {
+			if response.Headers[canonicalHeader(HeaderContentType)] == "" {
+				response.Headers[canonicalHeader(HeaderContentType)] = MIMEApplicationJSON
 			}
 		}
 
-		// Calculate duration
-		duration := time.Since(start)
-
-		// Format log message
-		log := formatStr
-		log = strings.Replace(log, "{method}", req.Request.Method, -1)
-		log = strings.Replace(log, "{path}", req.Request.URL.Path, -1)
-		log = strings.Replace(log, "{status}", fmt.Sprintf("%d", resp.StatusCode), -1)
-		log = strings.Replace(log, "{duration}", fmt.Sprintf("%.3f", float64(duration.Microseconds())/1000.0), -1)
-		log = strings.Replace(log, "{size}", fmt.Sprintf("%d", len(resp.Body)), -1)
-
-		// Print log (in real implementation this should use a configurable logger)
-		fmt.Println(log)
-
-		return resp
+		return response
 	}
-
-	// Use the middleware factory to create the builtin
-	return middlewareFactory("logging_middleware", loggingMiddlewareFunc), nil
 }
 
-// timingMiddleware creates a timing middleware that adds response time header
-func timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		header    = starlark.String("X-Response-Time")
-		precision = starlark.MakeInt(3)
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"header?", &header,
-		"precision?", &precision,
-	); err != nil {
-		return none, err
+// compressionMiddleware creates a compression middleware with gzip support
+func compressionMiddleware(level int, minSize int, types []string) MiddlewareFunc {
+	// Validate compression level
+	if level < 1 || level > 9 {
+		level = 6 // Default compression level
 	}
 
-	headerName := header.GoString()
-	precisionInt, _ := precision.Int64()
-
-	// Create the actual middleware function
-	timingMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Start timer
-		start := time.Now()
-
-		// Process request
-		resp := next(req)
-
-		// Calculate duration
-		duration := time.Since(start)
-
-		// Add timing header
-		if resp.Headers == nil {
-			resp.Headers = make(http.Header)
-		}
-
-		// Format with specified precision
-		format := fmt.Sprintf("%%.%df", precisionInt)
-		timeValue := fmt.Sprintf(format, float64(duration.Microseconds())/1000.0)
-
-		resp.Headers[headerName] = []string{timeValue + "ms"}
-
-		return resp
+	// Default minimum size
+	if minSize <= 0 {
+		minSize = 1024 // 1KB default
 	}
 
-	// Use the middleware factory to create the builtin
-	return middlewareFactory("timing_middleware", timingMiddlewareFunc), nil
-}
-
-// compressionMiddleware creates a compression middleware
-func compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		level   = starlark.MakeInt(6)
-		minSize = starlark.MakeInt(1024)
-		types   *starlark.List
-	)
-
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"level?", &level,
-		"min_size?", &minSize,
-		"types?", &types,
-	); err != nil {
-		return none, err
-	}
-
-	levelInt, _ := level.Int64()
-	minSizeInt, _ := minSize.Int64()
-
-	// Convert content types to Go slice using helper
-	var typesSlice []string
-	if types != nil {
-		typesSlice = starlarkListToStringSlice(types)
-	} else {
-		// Default content types to compress
-		typesSlice = []string{
-			"text/html",
-			"text/css",
-			"text/plain",
-			"text/javascript",
-			"application/javascript",
-			"application/json",
-			"application/xml",
+	// Default compressible types if none provided
+	if len(types) == 0 {
+		types = []string{
+			MIMETextPlain,
+			MIMETextHTML,
+			MIMEApplicationJSON,
+			MIMETextCSS,
+			MIMETextJavaScript,
+			MIMEApplicationJavaScript,
 		}
 	}
 
-	// Create the actual middleware function
-	compressionMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Check if the client accepts gzip encoding
-		acceptEncoding := req.Request.Header.Get("Accept-Encoding")
-		supportsGzip := strings.Contains(acceptEncoding, "gzip")
-
-		if !supportsGzip {
-			// If client doesn't support gzip, skip compression
+	return func(req *Request, next NextFunc) *Response {
+		// Check if client accepts gzip
+		acceptEncoding := req.Headers[canonicalHeader("Accept-Encoding")]
+		if !strings.Contains(acceptEncoding, "gzip") {
 			return next(req)
 		}
 
 		// Process request
-		resp := next(req)
+		response := next(req)
 
-		// Don't compress if response is too small
-		if len(resp.Body) < int(minSizeInt) {
-			return resp
+		// Check if response should be compressed
+		if len(response.Body) < minSize {
+			return response
 		}
 
 		// Check content type
-		contentType := ""
-		if resp.Headers != nil {
-			if values, ok := resp.Headers["Content-Type"]; ok && len(values) > 0 {
-				contentType = values[0]
+		contentType := response.Headers[canonicalHeader(HeaderContentType)]
+		if contentType == "" {
+			// Try to determine from body
+			if isCompressibleContentType(parseContentType(contentType)) {
+				contentType = MIMETextPlain
+			} else {
+				return response
 			}
 		}
 
 		shouldCompress := false
-		for _, t := range typesSlice {
-			if strings.HasPrefix(contentType, t) {
+		mainContentType := parseContentType(contentType)
+		for _, compressibleType := range types {
+			if mainContentType == compressibleType {
 				shouldCompress = true
 				break
 			}
 		}
 
 		if !shouldCompress {
-			return resp
+			return response
 		}
 
 		// Compress response body
-		var b bytes.Buffer
-		gz, err := gzip.NewWriterLevel(&b, int(levelInt))
+		var buf bytes.Buffer
+		writer, err := gzip.NewWriterLevel(&buf, level)
 		if err != nil {
-			// Fallback to default compression if level is invalid
-			gz = gzip.NewWriter(&b)
+			return response // Return uncompressed on error
 		}
 
-		if _, err := gz.Write([]byte(resp.Body)); err != nil {
-			// If compression fails, return uncompressed
-			return resp
+		_, err = writer.Write([]byte(response.Body))
+		if err != nil {
+			return response
 		}
 
-		if err := gz.Close(); err != nil {
-			// If compression fails, return uncompressed
-			return resp
+		err = writer.Close()
+		if err != nil {
+			return response
 		}
 
 		// Update response
-		if resp.Headers == nil {
-			resp.Headers = make(http.Header)
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
 		}
+		response.Headers[canonicalHeader(HeaderContentEncoding)] = "gzip"
+		response.Headers[canonicalHeader(HeaderVary)] = "Accept-Encoding"
+		response.Headers[canonicalHeader(HeaderContentLength)] = strconv.Itoa(buf.Len())
+		response.Body = buf.String()
 
-		resp.Headers["Content-Encoding"] = []string{"gzip"}
-		resp.Headers["Vary"] = []string{"Accept-Encoding"}
-		resp.Body = b.String()
-
-		return resp
+		return response
 	}
-
-	// Use the middleware factory to create the builtin
-	return middlewareFactory("compression_middleware", compressionMiddlewareFunc), nil
 }
 
-// securityHeadersMiddleware creates a security headers middleware
-func securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		frameOptions       = starlark.String("DENY")
-		contentTypeOptions = starlark.String("nosniff")
-		xssProtection      = starlark.String("1; mode=block")
-		hsts               = starlark.String("")
-		csp                = starlark.String("")
-		referrerPolicy     = starlark.String("strict-origin-when-cross-origin")
-	)
+// RateLimitStorage interface for rate limiting storage backends
+type RateLimitStorage interface {
+	Get(key string) (int, error)
+	Set(key string, value int, ttl time.Duration) error
+	Increment(key string, ttl time.Duration) (int, error)
+}
 
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"frame_options?", &frameOptions,
-		"content_type_options?", &contentTypeOptions,
-		"xss_protection?", &xssProtection,
-		"hsts?", &hsts,
-		"csp?", &csp,
-		"referrer_policy?", &referrerPolicy,
-	); err != nil {
-		return none, err
+// MemoryRateLimitStorage implements in-memory rate limiting storage
+type MemoryRateLimitStorage struct {
+	data map[string]*rateLimitEntry
+	mu   sync.RWMutex
+}
+
+type rateLimitEntry struct {
+	count   int
+	expires time.Time
+}
+
+// NewMemoryRateLimitStorage creates a new memory-based rate limit storage
+func NewMemoryRateLimitStorage() *MemoryRateLimitStorage {
+	storage := &MemoryRateLimitStorage{
+		data: make(map[string]*rateLimitEntry),
 	}
 
-	frameOpt := frameOptions.GoString()
-	contentTypeOpt := contentTypeOptions.GoString()
-	xssOpt := xssProtection.GoString()
-	hstsOpt := hsts.GoString()
-	cspOpt := csp.GoString()
-	referrerOpt := referrerPolicy.GoString()
+	// Start cleanup goroutine
+	go storage.cleanup()
 
-	// Create the actual middleware function
-	securityHeadersMiddlewareFunc := func(req *Request, next NextFunc) *Response {
-		// Process request first
-		resp := next(req)
+	return storage
+}
 
-		// Add security headers to response
-		if resp.Headers == nil {
-			resp.Headers = make(http.Header)
-		}
+func (m *MemoryRateLimitStorage) Get(key string) (int, error) {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
 
-		// Set security headers if configured
-		if frameOpt != "" {
-			resp.Headers["X-Frame-Options"] = []string{frameOpt}
-		}
+	if entry, exists := m.data[key]; exists && time.Now().Before(entry.expires) {
+		return entry.count, nil
+	}
+	return 0, nil
+}
 
-		if contentTypeOpt != "" {
-			resp.Headers["X-Content-Type-Options"] = []string{contentTypeOpt}
-		}
+func (m *MemoryRateLimitStorage) Set(key string, value int, ttl time.Duration) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		if xssOpt != "" {
-			resp.Headers["X-XSS-Protection"] = []string{xssOpt}
-		}
+	m.data[key] = &rateLimitEntry{
+		count:   value,
+		expires: time.Now().Add(ttl),
+	}
+	return nil
+}
 
-		if hstsOpt != "" {
-			resp.Headers["Strict-Transport-Security"] = []string{hstsOpt}
-		}
+func (m *MemoryRateLimitStorage) Increment(key string, ttl time.Duration) (int, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 
-		if cspOpt != "" {
-			resp.Headers["Content-Security-Policy"] = []string{cspOpt}
-		}
-
-		if referrerOpt != "" {
-			resp.Headers["Referrer-Policy"] = []string{referrerOpt}
-		}
-
-		return resp
+	now := time.Now()
+	if entry, exists := m.data[key]; exists && now.Before(entry.expires) {
+		entry.count++
+		return entry.count, nil
 	}
 
-	// Use the middleware factory to create the builtin
-	return middlewareFactory("security_headers_middleware", securityHeadersMiddlewareFunc), nil
+	// Create new entry
+	m.data[key] = &rateLimitEntry{
+		count:   1,
+		expires: now.Add(ttl),
+	}
+	return 1, nil
+}
+
+func (m *MemoryRateLimitStorage) cleanup() {
+	ticker := time.NewTicker(time.Minute)
+	defer ticker.Stop()
+
+	for range ticker.C {
+		m.mu.Lock()
+		now := time.Now()
+		for key, entry := range m.data {
+			if now.After(entry.expires) {
+				delete(m.data, key)
+			}
+		}
+		m.mu.Unlock()
+	}
+}
+
+// rateLimitMiddleware creates a rate limiting middleware
+func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string, storage RateLimitStorage) MiddlewareFunc {
+	if requests <= 0 {
+		requests = 100 // Default 100 requests
+	}
+	if window <= 0 {
+		window = 60 // Default 60 seconds
+	}
+	if keyFunc == nil {
+		keyFunc = func(req *Request) string {
+			return req.ClientIP
+		}
+	}
+	if storage == nil {
+		storage = NewMemoryRateLimitStorage()
+	}
+
+	windowDuration := time.Duration(window) * time.Second
+
+	return func(req *Request, next NextFunc) *Response {
+		key := createRateLimitKey("rate_limit", keyFunc(req))
+
+		count, err := storage.Increment(key, windowDuration)
+		if err != nil {
+			// On storage error, allow the request
+			return next(req)
+		}
+
+		if count > requests {
+			return createTooManyRequestsResponse(window)
+		}
+
+		// Add rate limit headers to response
+		response := next(req)
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+
+		response.Headers[HeaderXRateLimitLimit] = strconv.Itoa(requests)
+		response.Headers[HeaderXRateLimitRemaining] = strconv.Itoa(max(0, requests-count))
+		response.Headers[HeaderXRateLimitReset] = strconv.FormatInt(time.Now().Add(windowDuration).Unix(), 10)
+
+		return response
+	}
+}
+
+// cacheMiddleware creates a response caching middleware
+func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string) MiddlewareFunc {
+	if maxAge <= 0 {
+		maxAge = 3600 // Default 1 hour
+	}
+
+	return func(req *Request, next NextFunc) *Response {
+		// Only cache GET requests
+		if req.Method != http.MethodGet {
+			return next(req)
+		}
+
+		// Check if path matches patterns
+		if len(patterns) > 0 {
+			matched := false
+			for _, pattern := range patterns {
+				if MatchesPattern(req.Path, pattern) {
+					matched = true
+					break
+				}
+			}
+			if !matched {
+				return next(req)
+			}
+		}
+
+		response := next(req)
+
+		// Add cache headers
+		if response.Headers == nil {
+			response.Headers = make(map[string]string)
+		}
+
+		cacheControl := fmt.Sprintf("max-age=%d", maxAge)
+		if private {
+			cacheControl = "private, " + cacheControl
+		} else {
+			cacheControl = "public, " + cacheControl
+		}
+		response.Headers[canonicalHeader(HeaderCacheControl)] = cacheControl
+
+		if len(vary) > 0 {
+			response.Headers[canonicalHeader(HeaderVary)] = strings.Join(vary, ", ")
+		}
+
+		return response
+	}
+}
+
+// requestSizeMiddleware creates a middleware that limits request sizes
+func requestSizeMiddleware(maxContentLength int64, maxURLLength int, maxHeaders int) MiddlewareFunc {
+	if maxContentLength <= 0 {
+		maxContentLength = 10 * 1024 * 1024 // Default 10MB
+	}
+	if maxURLLength <= 0 {
+		maxURLLength = 2048 // Default 2KB
+	}
+	if maxHeaders <= 0 {
+		maxHeaders = 100 // Default 100 headers
+	}
+
+	return func(req *Request, next NextFunc) *Response {
+		// Check URL length (including query parameters)
+		requestURI := req.Path
+		if len(req.Query) > 0 {
+			// Reconstruct the query string
+			queryParts := make([]string, 0, len(req.Query))
+			for key, value := range req.Query {
+				queryParts = append(queryParts, key+"="+value)
+			}
+			if len(queryParts) > 0 {
+				requestURI = requestURI + "?" + strings.Join(queryParts, "&")
+			}
+		}
+
+		if len(requestURI) > maxURLLength {
+			return createURITooLongResponse(maxURLLength)
+		}
+
+		// Check number of headers
+		if len(req.Headers) > maxHeaders {
+			return createNotAcceptableResponse(fmt.Sprintf("Too many headers (max: %d)", maxHeaders))
+		}
+
+		// Check content length
+		if len(req.bodyData) > int(maxContentLength) {
+			return createRequestEntityTooLargeResponse(maxContentLength)
+		}
+
+		return next(req)
+	}
 }

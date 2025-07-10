@@ -1,14 +1,13 @@
-// Package web provides a Starlark module for server-side web application development.
+// Package web provides a Starlark module for server-side web applications.
+// It offers a Flask-inspired API for building HTTP servers with routing, middleware,
+// request/response handling, and session management capabilities.
 package web
 
 import (
 	"fmt"
-	"strings"
-	"time"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
-	"github.com/1set/starlight/convert"
 	"github.com/starpkg/base"
 	"go.starlark.net/starlark"
 )
@@ -16,60 +15,40 @@ import (
 // ModuleName defines the expected name for this module when used in Starlark's load() function
 const ModuleName = "web"
 
-// Pre-computed module prefix for performance
-const modulePrefix = ModuleName + "."
-
 // Configuration key constants
 const (
-	configKeyHost              = "host"
-	configKeyPort              = "port"
-	configKeyReadTimeout       = "read_timeout"
-	configKeyWriteTimeout      = "write_timeout"
-	configKeyMaxBodySize       = "max_body_size"
-	configKeyEnableCORS        = "enable_cors"
-	configKeyCORSOrigins       = "cors_origins"
-	configKeyEnableCompression = "enable_compression"
-	configKeyStaticCacheMaxAge = "static_cache_max_age"
+	configKeyHost         = "host"
+	configKeyPort         = "port"
+	configKeyReadTimeout  = "read_timeout"
+	configKeyWriteTimeout = "write_timeout"
+	configKeyMaxBodySize  = "max_body_size"
+	configKeyDebugMode    = "debug_mode"
+	configKeyServerHeader = "server_header"
 )
 
 var (
-	none  = starlark.None
-	empty = ""
+	none = starlark.None
 )
 
-// Module wraps the ConfigurableModule with specific functionality for web server management
+// Module wraps the ConfigurableModule with specific functionality for web server
 type Module struct {
 	cfgMod *base.ConfigurableModule
 	ext    *base.ConfigurableModuleExt
 }
 
-// NewModule creates a new instance of Module with default configurations
+// NewModule creates a new instance of Module with default configurations.
+// This is the primary entry point for creating a web module that can be loaded
+// into a Starlark environment. The module provides functions for creating HTTP servers,
+// handling requests and responses, and managing web application lifecycle.
 func NewModule() *Module {
 	return newModuleWithOptions(
-		genConfigOption(configKeyHost, "Host address to bind to", "localhost"),
-		genConfigOption(configKeyPort, "Port number to listen on", 8080),
+		genConfigOption(configKeyHost, "Default host to bind to", "localhost"),
+		genConfigOption(configKeyPort, "Default port to listen on", 8080),
 		genConfigOption(configKeyReadTimeout, "Read timeout in seconds", 30),
 		genConfigOption(configKeyWriteTimeout, "Write timeout in seconds", 30),
-		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32*1024*1024)), // 32MB
-		genConfigOption(configKeyEnableCORS, "Enable CORS middleware", false),
-		genConfigOption(configKeyCORSOrigins, "CORS allowed origins", []string{"*"}),
-		genConfigOption(configKeyEnableCompression, "Enable response compression", true),
-		genConfigOption(configKeyStaticCacheMaxAge, "Static file cache max age in seconds", 3600),
-	)
-}
-
-// NewModuleWithConfig creates a new instance of Module with the given configuration values
-func NewModuleWithConfig(host string, port int, readTimeout, writeTimeout int, maxBodySize int64, enableCORS bool, corsOrigins []string, enableCompression bool, staticCacheMaxAge int) *Module {
-	return newModuleWithOptions(
-		genConfigOption(configKeyHost, "Host address with preset value", host),
-		genConfigOption(configKeyPort, "Port number with preset value", port),
-		genConfigOption(configKeyReadTimeout, "Read timeout with preset value", readTimeout),
-		genConfigOption(configKeyWriteTimeout, "Write timeout with preset value", writeTimeout),
-		genConfigOption(configKeyMaxBodySize, "Maximum body size with preset value", maxBodySize),
-		genConfigOption(configKeyEnableCORS, "Enable CORS with preset value", enableCORS),
-		genConfigOption(configKeyCORSOrigins, "CORS origins with preset value", corsOrigins),
-		genConfigOption(configKeyEnableCompression, "Enable compression with preset value", enableCompression),
-		genConfigOption(configKeyStaticCacheMaxAge, "Static cache max age with preset value", staticCacheMaxAge),
+		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
+		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
+		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 	)
 }
 
@@ -80,7 +59,7 @@ func genConfigOption[T any](name, description string, defaultValue T) *base.Conf
 	return base.NewConfigOption(defaultValue).
 		WithName(name).
 		WithDescription(description).
-		WithEnvVar(fmt.Sprintf("WEB_%s", strings.ToUpper(name)))
+		WithEnvVar(fmt.Sprintf("%s_%s", ModuleName, name))
 }
 
 // newModuleWithOptions creates a Module with the given configuration options
@@ -90,10 +69,8 @@ func newModuleWithOptions(
 	readTimeoutOpt *base.ConfigOption[int],
 	writeTimeoutOpt *base.ConfigOption[int],
 	maxBodySizeOpt *base.ConfigOption[int64],
-	enableCORSOpt *base.ConfigOption[bool],
-	corsOriginsOpt *base.ConfigOption[[]string],
-	enableCompressionOpt *base.ConfigOption[bool],
-	staticCacheMaxAgeOpt *base.ConfigOption[int],
+	debugModeOpt *base.ConfigOption[bool],
+	serverHeaderOpt *base.ConfigOption[string],
 ) *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		hostOpt,
@@ -101,10 +78,8 @@ func newModuleWithOptions(
 		readTimeoutOpt,
 		writeTimeoutOpt,
 		maxBodySizeOpt,
-		enableCORSOpt,
-		corsOriginsOpt,
-		enableCompressionOpt,
-		staticCacheMaxAgeOpt,
+		debugModeOpt,
+		serverHeaderOpt,
 	)
 	return &Module{
 		cfgMod: cm,
@@ -112,118 +87,99 @@ func newModuleWithOptions(
 	}
 }
 
-// LoadModule returns the Starlark module loader with web-specific functions
+// LoadModule returns the Starlark module loader with web-specific functions.
+// This method provides the complete set of web module functions that can be
+// called from Starlark scripts, including server creation and response builders.
 func (m *Module) LoadModule() starlet.ModuleLoader {
-	// Core web server functions
+	// Module functions
 	additionalFuncs := starlark.StringDict{
-		"create_server":          starlark.NewBuiltin(modulePrefix+"create_server", m.createServer),
-		"create_session_manager": starlark.NewBuiltin(modulePrefix+"create_session_manager", m.createSessionManager),
-		"response":               starlark.NewBuiltin(modulePrefix+"response", m.response),
-		"json_response":          starlark.NewBuiltin(modulePrefix+"json_response", m.jsonResponse),
-		"html_response":          starlark.NewBuiltin(modulePrefix+"html_response", m.htmlResponse),
-		"redirect":               starlark.NewBuiltin(modulePrefix+"redirect", m.redirect),
-		"error_response":         starlark.NewBuiltin(modulePrefix+"error_response", m.errorResponse),
-		"send_file":              starlark.NewBuiltin(modulePrefix+"send_file", m.sendFile),
-		"send_data":              starlark.NewBuiltin(modulePrefix+"send_data", m.sendData),
-		"basic_auth":             starlark.NewBuiltin(modulePrefix+"basic_auth", m.basicAuth),
-		"bearer_auth":            starlark.NewBuiltin(modulePrefix+"bearer_auth", m.bearerAuth),
-		"api_key_auth":           starlark.NewBuiltin(modulePrefix+"api_key_auth", m.apiKeyAuth),
-
-		// Built-in middleware functions
-		"cors_middleware":             starlark.NewBuiltin(modulePrefix+"cors_middleware", corsMiddleware),
-		"logging_middleware":          starlark.NewBuiltin(modulePrefix+"logging_middleware", loggingMiddleware),
-		"timing_middleware":           starlark.NewBuiltin(modulePrefix+"timing_middleware", timingMiddleware),
-		"compression_middleware":      starlark.NewBuiltin(modulePrefix+"compression_middleware", compressionMiddleware),
-		"security_headers_middleware": starlark.NewBuiltin(modulePrefix+"security_headers_middleware", securityHeadersMiddleware),
-		"session_middleware":          starlark.NewBuiltin(modulePrefix+"session_middleware", m.sessionMiddleware),
+		"create_server":  starlark.NewBuiltin(ModuleName+".create_server", m.createServer),
+		"response":       starlark.NewBuiltin(ModuleName+".response", m.response),
+		"json_response":  starlark.NewBuiltin(ModuleName+".json_response", m.jsonResponse),
+		"html_response":  starlark.NewBuiltin(ModuleName+".html_response", m.htmlResponse),
+		"text_response":  starlark.NewBuiltin(ModuleName+".text_response", m.textResponse),
+		"file_response":  starlark.NewBuiltin(ModuleName+".file_response", m.fileResponse),
+		"redirect":       starlark.NewBuiltin(ModuleName+".redirect", m.redirect),
+		"error_response": starlark.NewBuiltin(ModuleName+".error_response", m.errorResponse),
+		"send_file":      starlark.NewBuiltin(ModuleName+".send_file", m.sendFile),
+		"send_data":      starlark.NewBuiltin(ModuleName+".send_data", m.sendData),
+		// Authentication functions
+		"api_key_auth": starlark.NewBuiltin(ModuleName+".api_key_auth", m.apiKeyAuth),
+		"bearer_auth":  starlark.NewBuiltin(ModuleName+".bearer_auth", m.bearerAuth),
+		"basic_auth":   starlark.NewBuiltin(ModuleName+".basic_auth", m.basicAuth),
+		// Middleware functions
+		"cors_middleware":             starlark.NewBuiltin(ModuleName+".cors_middleware", m.corsMiddleware),
+		"logging_middleware":          starlark.NewBuiltin(ModuleName+".logging_middleware", m.loggingMiddleware),
+		"security_headers_middleware": starlark.NewBuiltin(ModuleName+".security_headers_middleware", m.securityHeadersMiddleware),
+		"timing_middleware":           starlark.NewBuiltin(ModuleName+".timing_middleware", m.timingMiddleware),
+		"json_middleware":             starlark.NewBuiltin(ModuleName+".json_middleware", m.jsonMiddleware),
+		"compression_middleware":      starlark.NewBuiltin(ModuleName+".compression_middleware", m.compressionMiddleware),
+		"rate_limit_middleware":       starlark.NewBuiltin(ModuleName+".rate_limit_middleware", m.rateLimitMiddleware),
+		"cache_middleware":            starlark.NewBuiltin(ModuleName+".cache_middleware", m.cacheMiddleware),
+		"request_size_middleware":     starlark.NewBuiltin(ModuleName+".request_size_middleware", m.requestSizeMiddleware),
 	}
 	return m.cfgMod.LoadModule(ModuleName, additionalFuncs)
 }
 
-// createServer creates a new HTTP server instance
+// createServer is a Starlark function that creates a new HTTP server.
+// It accepts optional host and port parameters and returns a ServerWrapper
+// that provides Starlark-compatible methods for route registration and server lifecycle.
 func (m *Module) createServer(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	// Parse arguments
 	var (
-		host = starlark.String(m.ext.GetString(configKeyHost, "localhost"))
-		port = starlark.MakeInt(m.ext.GetInt(configKeyPort, 8080))
+		host         = starlark.String("")
+		port         = starlark.MakeInt(0)
+		serverHeader = starlark.String("")
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"host?", &host,
 		"port?", &port,
+		"server_header?", &serverHeader,
 	); err != nil {
 		return none, err
 	}
 
-	// Convert port to integer
-	portInt, ok := port.Int64()
-	if !ok {
-		return none, fmt.Errorf("port must be an integer")
+	// Get configuration values
+	defaultHost := m.ext.GetString(configKeyHost)
+	defaultPort := m.ext.GetInt(configKeyPort)
+
+	// Use provided values or defaults
+	serverHost := string(host)
+	if serverHost == "" {
+		serverHost = defaultHost
 	}
 
-	// Get CORS origins - implement workaround for string slice
-	corsOriginsStr := m.ext.GetString(configKeyCORSOrigins, "*")
-	var corsOrigins []string
-	if corsOriginsStr == "*" {
-		corsOrigins = []string{"*"}
-	} else {
-		// Parse comma-separated values
-		parts := strings.Split(corsOriginsStr, ",")
-		corsOrigins = make([]string, len(parts))
-		for i, part := range parts {
-			corsOrigins[i] = strings.TrimSpace(part)
+	serverPort := defaultPort
+	if port.Sign() != 0 {
+		portInt, ok := port.Int64()
+		if !ok {
+			return none, fmt.Errorf("invalid port value")
 		}
+		serverPort = int(portInt)
 	}
 
-	// Create server configuration
-	config := &ServerConfig{
-		Host:              host.GoString(),
-		Port:              int(portInt),
-		ReadTimeout:       time.Duration(m.ext.GetInt(configKeyReadTimeout, 30)) * time.Second,
-		WriteTimeout:      time.Duration(m.ext.GetInt(configKeyWriteTimeout, 30)) * time.Second,
-		MaxBodySize:       int64(m.ext.GetInt(configKeyMaxBodySize, 32*1024*1024)),
-		EnableCORS:        m.ext.GetBool(configKeyEnableCORS, false),
-		CORSOrigins:       corsOrigins,
-		EnableCompression: m.ext.GetBool(configKeyEnableCompression, true),
-		StaticCacheMaxAge: m.ext.GetInt(configKeyStaticCacheMaxAge, 3600),
+	// Validate port
+	if serverPort <= 0 || serverPort > 65535 {
+		return none, fmt.Errorf("port must be between 1 and 65535")
 	}
 
-	// Create and return server instance
-	server := NewServer(config)
-	return server.Struct(), nil
+	// Create server instance using the new constructor
+	server := newServer(m, serverHost, serverPort)
+
+	// Override server header if provided
+	if string(serverHeader) != "" {
+		server.serverHeader = string(serverHeader)
+	}
+
+	// Convert to Starlark value using wrapper
+	return NewServerWrapper(server), nil
 }
 
-// createSessionManager creates a session manager for handling user sessions
-func (m *Module) createSessionManager(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var (
-		secret     starlark.String
-		cookieName = starlark.String("session")
-		maxAge     = starlark.MakeInt(86400) // 24 hours
-	)
+// Response builders
 
-	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"secret", &secret,
-		"cookie_name?", &cookieName,
-		"max_age?", &maxAge,
-	); err != nil {
-		return none, err
-	}
-
-	maxAgeInt, ok := maxAge.Int64()
-	if !ok {
-		return none, fmt.Errorf("max_age must be an integer")
-	}
-
-	sessionManager := NewSessionManager(secret.GoString(), cookieName.GoString(), int(maxAgeInt))
-
-	// Start the cleanup task for expired sessions
-	sessionManager.StartCleanupTask()
-
-	// Return the SessionManager's Struct directly instead of marshaling
-	return sessionManager.Struct(), nil
-}
-
-// response creates a custom HTTP response
+// response creates a basic HTTP response.
+// This function constructs an HTTP response with the specified body, status code,
+// and headers. It returns a ResponseWrapper that can be returned from route handlers.
 func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		body    = starlark.String("")
@@ -232,33 +188,40 @@ func (m *Module) response(thread *starlark.Thread, b *starlark.Builtin, args sta
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"body?", &body,
+		"body", &body,
 		"status?", &status,
 		"headers?", &headers,
 	); err != nil {
 		return none, err
 	}
 
-	statusInt, ok := status.Int64()
-	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+	statusCode, _ := status.Int64()
+	headerMap := make(map[string]string)
+
+	for _, item := range headers.Items() {
+		key, ok := item[0].(starlark.String)
+		if !ok {
+			continue
+		}
+		value, ok := item[1].(starlark.String)
+		if !ok {
+			continue
+		}
+		headerMap[string(key)] = string(value)
 	}
 
-	resp := &Response{
-		StatusCode: int(statusInt),
-		Headers:    make(map[string][]string),
-		Body:       body.GoString(),
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers:    headerMap,
+		Body:       string(body),
 	}
-
-	// Add headers from dict using helper
-	if headers.Len() > 0 {
-		resp.Headers = starlarkDictToHeaders(headers)
-	}
-
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
 }
 
-// jsonResponse creates a JSON HTTP response
+// jsonResponse creates a JSON HTTP response.
+// This function automatically serializes Starlark data structures to JSON
+// and sets the appropriate Content-Type header. It handles various Starlark types
+// including dicts, lists, strings, and numbers.
 func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
 		data    starlark.Value
@@ -274,41 +237,41 @@ func (m *Module) jsonResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, err
 	}
 
-	statusInt, ok := status.Int64()
-	if !ok {
-		return none, fmt.Errorf("status must be an integer")
-	}
-
-	// Convert Starlark value to JSON
-	jsonData, err := dataconv.Unmarshal(data)
-	if err != nil {
-		return none, fmt.Errorf("failed to convert data to JSON: %v", err)
-	}
-
-	resp := &Response{
-		StatusCode: int(statusInt),
-		Headers:    make(map[string][]string),
-		JSONData:   jsonData,
-	}
-
-	// Set content type
-	resp.Headers["Content-Type"] = []string{"application/json"}
-
-	// Add additional headers using helper
-	if headers.Len() > 0 {
-		additionalHeaders := starlarkDictToHeaders(headers)
-		for k, v := range additionalHeaders {
-			resp.Headers[k] = v
+	// Convert data to JSON, if it's not a string or bytes, encode it to JSON
+	var bodyStr string
+	switch data.(type) {
+	case starlark.String:
+		bodyStr = string(data.(starlark.String))
+	case starlark.Bytes:
+		bodyStr = string(data.(starlark.Bytes))
+	default:
+		var err error
+		if bodyStr, err = dataconv.EncodeStarlarkJSON(data); err != nil {
+			return none, fmt.Errorf("failed to marshal JSON: %v", err)
 		}
 	}
 
-	return convert.ToValue(resp)
+	statusCode, _ := status.Int64()
+	headerMap, err := starlarkDictToStringMap(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
+	}
+
+	// Set content type
+	headerMap[canonicalHeader(HeaderContentType)] = MIMEApplicationJSON
+
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers:    headerMap,
+		Body:       bodyStr,
+	}
+	return NewResponseWrapper(response), nil
 }
 
 // htmlResponse creates an HTML HTTP response
 func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		content starlark.String
+		content = starlark.String("")
 		status  = starlark.MakeInt(200)
 		headers = starlark.NewDict(0)
 	)
@@ -321,35 +284,89 @@ func (m *Module) htmlResponse(thread *starlark.Thread, b *starlark.Builtin, args
 		return none, err
 	}
 
-	statusInt, ok := status.Int64()
-	if !ok {
-		return none, fmt.Errorf("status must be an integer")
-	}
-
-	resp := &Response{
-		StatusCode: int(statusInt),
-		Headers:    make(map[string][]string),
-		Body:       content.GoString(),
+	statusCode, _ := status.Int64()
+	headerMap, err := starlarkDictToStringMap(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
 	}
 
 	// Set content type
-	resp.Headers["Content-Type"] = []string{"text/html"}
+	headerMap[canonicalHeader(HeaderContentType)] = MIMETextHTML
 
-	// Add additional headers using helper
-	if headers.Len() > 0 {
-		additionalHeaders := starlarkDictToHeaders(headers)
-		for k, v := range additionalHeaders {
-			resp.Headers[k] = v
-		}
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers:    headerMap,
+		Body:       string(content),
 	}
 
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
+}
+
+// textResponse creates a text response
+func (m *Module) textResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		text   = starlark.String("")
+		status = starlark.MakeInt(200)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"text", &text,
+		"status?", &status,
+	); err != nil {
+		return none, err
+	}
+
+	statusCode, _ := status.Int64()
+
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType): MIMETextPlain,
+		},
+		Body: string(text),
+	}
+
+	return NewResponseWrapper(response), nil
+}
+
+// fileResponse creates a file response
+func (m *Module) fileResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		filepath    = starlark.String("")
+		contentType = starlark.String("")
+		filename    = starlark.String("")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"filepath", &filepath,
+		"content_type?", &contentType,
+		"filename?", &filename,
+	); err != nil {
+		return none, err
+	}
+
+	response := &Response{
+		StatusCode: 200,
+		Headers:    map[string]string{},
+		Body:       "",
+		FilePath:   string(filepath),
+	}
+
+	if contentType != "" {
+		response.Headers[canonicalHeader(HeaderContentType)] = string(contentType)
+	}
+
+	if filename != "" {
+		response.Headers[canonicalHeader(HeaderContentDisposition)] = fmt.Sprintf("attachment; filename=%s", string(filename))
+	}
+
+	return NewResponseWrapper(response), nil
 }
 
 // redirect creates a redirect response
 func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		location starlark.String
+		location = starlark.String("")
 		status   = starlark.MakeInt(302)
 	)
 
@@ -360,27 +377,23 @@ func (m *Module) redirect(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	statusInt, ok := status.Int64()
-	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+	statusCode, _ := status.Int64()
+
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers: map[string]string{
+			canonicalHeader(HeaderLocation): string(location),
+		},
+		Body: "",
 	}
 
-	resp := &Response{
-		StatusCode: int(statusInt),
-		Headers:    make(map[string][]string),
-		Body:       "",
-	}
-
-	// Set location header
-	resp.Headers["Location"] = []string{location.GoString()}
-
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
 }
 
 // errorResponse creates an error response
 func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		status  starlark.Int
+		status  = starlark.MakeInt(500)
 		message = starlark.String("")
 	)
 
@@ -391,27 +404,21 @@ func (m *Module) errorResponse(thread *starlark.Thread, b *starlark.Builtin, arg
 		return none, err
 	}
 
-	statusInt, ok := status.Int64()
-	if !ok {
-		return none, fmt.Errorf("status must be an integer")
+	statusCode, _ := status.Int64()
+
+	response := &Response{
+		StatusCode: int(statusCode),
+		Headers:    map[string]string{},
+		Body:       string(message),
 	}
 
-	resp := &Response{
-		StatusCode: int(statusInt),
-		Headers:    make(map[string][]string),
-		Body:       message.GoString(),
-	}
-
-	// Set content type
-	resp.Headers["Content-Type"] = []string{"text/plain"}
-
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
 }
 
-// sendFile sends a file from the filesystem
+// sendFile creates a file response
 func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		filepath    starlark.String
+		filepath    = starlark.String("")
 		contentType = starlark.String("")
 	)
 
@@ -422,26 +429,26 @@ func (m *Module) sendFile(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	resp := &Response{
+	response := &Response{
 		StatusCode: 200,
-		Headers:    make(map[string][]string),
-		FilePath:   filepath.GoString(),
+		Headers:    map[string]string{},
+		Body:       "",
+		FilePath:   string(filepath),
 	}
 
-	// Set content type if provided
-	if contentType.GoString() != "" {
-		resp.Headers["Content-Type"] = []string{contentType.GoString()}
+	if contentType != "" {
+		response.Headers[canonicalHeader(HeaderContentType)] = string(contentType)
 	}
 
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
 }
 
-// sendData sends raw data as a file download
+// sendData creates a data response
 func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
-		data        starlark.String
-		filename    starlark.String
-		contentType = starlark.String("application/octet-stream")
+		data        = starlark.String("")
+		filename    = starlark.String("")
+		contentType = starlark.String(MIMEApplicationOctetStream)
 	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
@@ -452,60 +459,394 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 		return none, err
 	}
 
-	resp := &Response{
+	response := &Response{
 		StatusCode: 200,
-		Headers:    make(map[string][]string),
-		Body:       data.GoString(),
+		Headers: map[string]string{
+			canonicalHeader(HeaderContentType):        string(contentType),
+			canonicalHeader(HeaderContentDisposition): fmt.Sprintf("attachment; filename=%s", string(filename)),
+		},
+		Body: string(data),
 	}
 
-	// Set content type and attachment headers
-	resp.Headers["Content-Type"] = []string{contentType.GoString()}
-	resp.Headers["Content-Disposition"] = []string{fmt.Sprintf("attachment; filename=\"%s\"", filename.GoString())}
-
-	return convert.ToValue(resp)
+	return NewResponseWrapper(response), nil
 }
 
-// basicAuth creates a basic HTTP authentication validator
-func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return basicAuth(thread, b, args, kwargs)
-}
+// Authentication functions
 
-// bearerAuth creates a bearer token authentication validator
-func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return bearerAuth(thread, b, args, kwargs)
-}
-
-// apiKeyAuth creates an API key authentication validator
+// apiKeyAuth creates an API key authenticator
 func (m *Module) apiKeyAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	return apiKeyAuth(thread, b, args, kwargs)
-}
-
-// sessionMiddleware creates a session middleware
-func (m *Module) sessionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var sessionManager starlark.Value
+	var (
+		keys       = starlark.NewList(nil)
+		header     = starlark.String(HeaderAPIKey)
+		queryParam = starlark.String("api_key")
+	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
-		"session_manager", &sessionManager,
+		"keys?", &keys,
+		"header?", &header,
+		"query_param?", &queryParam,
 	); err != nil {
 		return none, err
 	}
 
-	// Extract session manager from Starlark value
-	goSessionManager, err := dataconv.Unmarshal(sessionManager)
+	// Convert Starlark list to Go slice
+	keySlice, err := starlarkListToStringSlice(keys)
 	if err != nil {
-		return none, fmt.Errorf("failed to unmarshal session manager: %v", err)
+		return none, fmt.Errorf("invalid keys: %v", err)
 	}
 
-	sm, ok := goSessionManager.(*SessionManager)
+	auth := &Authenticator{
+		authType: "api_key",
+		config: map[string]interface{}{
+			"keys":        keySlice,
+			"header":      canonicalHeader(string(header)),
+			"query_param": string(queryParam),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// bearerAuth creates a bearer token authenticator
+func (m *Module) bearerAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		validateFunc starlark.Callable
+		header       = starlark.String(HeaderAuthorization)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"validate_func", &validateFunc,
+		"header?", &header,
+	); err != nil {
+		return none, err
+	}
+
+	auth := &Authenticator{
+		validateFunc: validateFunc,
+		authType:     "bearer",
+		config: map[string]interface{}{
+			"header": canonicalHeader(string(header)),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// basicAuth creates a basic authenticator
+func (m *Module) basicAuth(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		users = starlark.NewDict(0)
+		realm = starlark.String("Restricted")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"users?", &users,
+		"realm?", &realm,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert Starlark dict to Go map
+	userMap, err := starlarkDictToStringMap(users)
+	if err != nil {
+		return none, fmt.Errorf("invalid users: %v", err)
+	}
+
+	auth := &Authenticator{
+		authType: "basic",
+		config: map[string]interface{}{
+			"users": userMap,
+			"realm": string(realm),
+		},
+	}
+
+	return NewAuthenticatorWrapper(auth), nil
+}
+
+// Middleware functions
+
+// corsMiddleware creates a CORS middleware
+func (m *Module) corsMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		origins     = starlark.NewList(nil)
+		methods     = starlark.NewList(nil)
+		headers     = starlark.NewList(nil)
+		credentials = starlark.Bool(false)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"origins?", &origins,
+		"methods?", &methods,
+		"headers?", &headers,
+		"credentials?", &credentials,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert lists to slices
+	originsSlice, err := starlarkListToStringSlice(origins)
+	if err != nil {
+		return none, fmt.Errorf("invalid origins: %v", err)
+	}
+
+	methodsSlice, err := starlarkListToStringSlice(methods)
+	if err != nil {
+		return none, fmt.Errorf("invalid methods: %v", err)
+	}
+
+	headersSlice, err := starlarkListToStringSlice(headers)
+	if err != nil {
+		return none, fmt.Errorf("invalid headers: %v", err)
+	}
+
+	middleware := corsMiddleware(originsSlice, methodsSlice, headersSlice, bool(credentials))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// loggingMiddleware creates a logging middleware
+func (m *Module) loggingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var format = starlark.String("")
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"format?", &format,
+	); err != nil {
+		return none, err
+	}
+
+	middleware := loggingMiddleware(string(format))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// securityHeadersMiddleware creates a security headers middleware
+func (m *Module) securityHeadersMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		frameOptions       = starlark.String("DENY")
+		contentTypeOptions = starlark.String("nosniff")
+		xssProtection      = starlark.String("1; mode=block")
+		hsts               = starlark.String("")
+		csp                = starlark.String("")
+		referrerPolicy     = starlark.String("")
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"frame_options?", &frameOptions,
+		"content_type_options?", &contentTypeOptions,
+		"xss_protection?", &xssProtection,
+		"hsts?", &hsts,
+		"csp?", &csp,
+		"referrer_policy?", &referrerPolicy,
+	); err != nil {
+		return none, err
+	}
+
+	config := make(map[string]string)
+	if string(frameOptions) != "" {
+		config["X-Frame-Options"] = string(frameOptions)
+	}
+	if string(contentTypeOptions) != "" {
+		config["X-Content-Type-Options"] = string(contentTypeOptions)
+	}
+	if string(xssProtection) != "" {
+		config["X-XSS-Protection"] = string(xssProtection)
+	}
+	if string(hsts) != "" {
+		config["Strict-Transport-Security"] = string(hsts)
+	}
+	if string(csp) != "" {
+		config["Content-Security-Policy"] = string(csp)
+	}
+	if string(referrerPolicy) != "" {
+		config["Referrer-Policy"] = string(referrerPolicy)
+	}
+
+	middleware := securityHeadersMiddleware(config)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// timingMiddleware creates a timing middleware
+func (m *Module) timingMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var header = starlark.String("X-Response-Time")
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"header?", &header,
+	); err != nil {
+		return none, err
+	}
+
+	middleware := timingMiddleware(string(header))
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// jsonMiddleware creates a JSON middleware
+func (m *Module) jsonMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs); err != nil {
+		return none, err
+	}
+
+	middleware := jsonMiddleware()
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// compressionMiddleware creates a compression middleware
+func (m *Module) compressionMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		level   = starlark.MakeInt(6)
+		minSize = starlark.MakeInt(1024)
+		types   = starlark.NewList(nil)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"level?", &level,
+		"min_size?", &minSize,
+		"types?", &types,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	levelInt, err := starlarkIntToInt(level)
+	if err != nil {
+		return none, fmt.Errorf("invalid level: %v", err)
+	}
+
+	minSizeInt, err := starlarkIntToInt(minSize)
+	if err != nil {
+		return none, fmt.Errorf("invalid min_size: %v", err)
+	}
+
+	typesSlice, err := starlarkListToStringSlice(types)
+	if err != nil {
+		return none, fmt.Errorf("invalid types: %v", err)
+	}
+
+	middleware := compressionMiddleware(levelInt, minSizeInt, typesSlice)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// rateLimitMiddleware creates a rate limiting middleware
+func (m *Module) rateLimitMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		requests                   = starlark.MakeInt(100)
+		window                     = starlark.MakeInt(60)
+		keyFunc  starlark.Callable = nil
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"requests?", &requests,
+		"window?", &window,
+		"key_func?", &keyFunc,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	requestsInt, err := starlarkIntToInt(requests)
+	if err != nil {
+		return none, fmt.Errorf("invalid requests: %v", err)
+	}
+
+	windowInt, err := starlarkIntToInt(window)
+	if err != nil {
+		return none, fmt.Errorf("invalid window: %v", err)
+	}
+
+	// Create key function wrapper
+	var goKeyFunc func(*Request) string
+	if keyFunc != nil {
+		goKeyFunc = func(req *Request) string {
+			thread := &starlark.Thread{Name: "rate_limit_key"}
+			reqWrapper := NewRequestWrapper(req)
+			args := starlark.Tuple{reqWrapper}
+			result, err := starlark.Call(thread, keyFunc, args, nil)
+			if err != nil {
+				return req.ClientIP // fallback to client IP
+			}
+			if str, ok := result.(starlark.String); ok {
+				return string(str)
+			}
+			return req.ClientIP
+		}
+	}
+
+	middleware := rateLimitMiddleware(requestsInt, windowInt, goKeyFunc, nil)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// cacheMiddleware creates a response caching middleware
+func (m *Module) cacheMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		maxAge   = starlark.MakeInt(3600)
+		private  = starlark.Bool(false)
+		patterns = starlark.NewList(nil)
+		vary     = starlark.NewList(nil)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"max_age?", &maxAge,
+		"private?", &private,
+		"patterns?", &patterns,
+		"vary?", &vary,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	maxAgeInt, err := starlarkIntToInt(maxAge)
+	if err != nil {
+		return none, fmt.Errorf("invalid max_age: %v", err)
+	}
+
+	privateBool, err := starlarkBoolToBool(private)
+	if err != nil {
+		return none, fmt.Errorf("invalid private: %v", err)
+	}
+
+	patternsSlice, err := starlarkListToStringSlice(patterns)
+	if err != nil {
+		return none, fmt.Errorf("invalid patterns: %v", err)
+	}
+
+	varySlice, err := starlarkListToStringSlice(vary)
+	if err != nil {
+		return none, fmt.Errorf("invalid vary: %v", err)
+	}
+
+	middleware := cacheMiddleware(maxAgeInt, privateBool, patternsSlice, varySlice)
+	return NewMiddlewareWrapper(middleware), nil
+}
+
+// requestSizeMiddleware creates a request size limiting middleware
+func (m *Module) requestSizeMiddleware(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		maxContentLength = starlark.MakeInt(10 * 1024 * 1024) // 10MB
+		maxURLLength     = starlark.MakeInt(2048)
+		maxHeaders       = starlark.MakeInt(100)
+	)
+
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"max_content_length?", &maxContentLength,
+		"max_url_length?", &maxURLLength,
+		"max_headers?", &maxHeaders,
+	); err != nil {
+		return none, err
+	}
+
+	// Convert parameters
+	maxContentLengthInt64, ok := maxContentLength.Int64()
 	if !ok {
-		return none, fmt.Errorf("expected SessionManager, got %T", goSessionManager)
+		return none, fmt.Errorf("invalid max_content_length")
 	}
 
-	// Create the middleware
-	middleware, err := sm.Middleware(thread, nil, nil, nil)
+	maxURLLengthInt, err := starlarkIntToInt(maxURLLength)
 	if err != nil {
-		return none, fmt.Errorf("failed to create session middleware: %v", err)
+		return none, fmt.Errorf("invalid max_url_length: %v", err)
 	}
 
-	return middleware, nil
+	maxHeadersInt, err := starlarkIntToInt(maxHeaders)
+	if err != nil {
+		return none, fmt.Errorf("invalid max_headers: %v", err)
+	}
+
+	middleware := requestSizeMiddleware(maxContentLengthInt64, maxURLLengthInt, maxHeadersInt)
+	return NewMiddlewareWrapper(middleware), nil
 }

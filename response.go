@@ -2,55 +2,153 @@ package web
 
 import (
 	"fmt"
-	"net/http"
-	"time"
 
-	"github.com/1set/starlet/dataconv"
 	"go.starlark.net/starlark"
-	"go.starlark.net/starlarkstruct"
 )
 
-// Response represents an HTTP response
+// Ensure ResponseWrapper implements the required Starlark interfaces
+var (
+	_ starlark.Value       = (*ResponseWrapper)(nil)
+	_ starlark.HasAttrs    = (*ResponseWrapper)(nil)
+	_ starlark.HasSetField = (*ResponseWrapper)(nil)
+)
+
+// Response represents an HTTP response.
+// This structure holds the complete response data including status code,
+// headers, body content, and optional file path for file responses.
 type Response struct {
-	StatusCode int
-	Headers    map[string][]string
-	Body       string
-	JSONData   interface{}
-	FilePath   string
+	StatusCode int               `json:"status_code"`
+	Headers    map[string]string `json:"headers"`
+	Body       string            `json:"body"`
+	FilePath   string            `json:"file_path,omitempty"`
 }
 
-// NewResponse creates a new Response
-func NewResponse(statusCode int, body string) *Response {
-	return &Response{
-		StatusCode: statusCode,
-		Headers:    make(map[string][]string),
-		Body:       body,
+// ResponseWrapper wraps the Response struct to provide Starlark-compatible interface.
+// This wrapper exposes response properties and methods to Starlark scripts,
+// allowing manipulation of cookies and access to response metadata.
+type ResponseWrapper struct {
+	response *Response
+}
+
+// NewResponseWrapper creates a new ResponseWrapper.
+// This function wraps a Response to make it accessible from Starlark
+// with proper attribute access and method calls.
+func NewResponseWrapper(response *Response) *ResponseWrapper {
+	return &ResponseWrapper{response: response}
+}
+
+// String returns the string representation of the response
+func (rw *ResponseWrapper) String() string {
+	return fmt.Sprintf("<web.Response status=%d>", rw.response.StatusCode)
+}
+
+// Type returns the type name for Starlark
+func (rw *ResponseWrapper) Type() string {
+	return "web.Response"
+}
+
+// Freeze marks the response as frozen (immutable)
+func (rw *ResponseWrapper) Freeze() {
+	// Response is immutable after creation
+}
+
+// Truth returns the truth value of the response
+func (rw *ResponseWrapper) Truth() starlark.Bool {
+	return starlark.True
+}
+
+// Hash returns the hash of the response (not supported)
+func (rw *ResponseWrapper) Hash() (uint32, error) {
+	return 0, fmt.Errorf("unhashable type: %s", rw.Type())
+}
+
+// Attr returns the value of the specified attribute
+func (rw *ResponseWrapper) Attr(name string) (starlark.Value, error) {
+	switch name {
+	case "status_code":
+		return starlark.MakeInt(rw.response.StatusCode), nil
+	case "headers":
+		// Convert headers map to Starlark dict
+		dict := starlark.NewDict(len(rw.response.Headers))
+		for k, v := range rw.response.Headers {
+			dict.SetKey(starlark.String(k), starlark.String(v))
+		}
+		return dict, nil
+	case "body":
+		return starlark.String(rw.response.Body), nil
+	case "file_path":
+		return starlark.String(rw.response.FilePath), nil
+	case "set_cookie":
+		return starlark.NewBuiltin("set_cookie", rw.setCookieMethod), nil
+	case "delete_cookie":
+		return starlark.NewBuiltin("delete_cookie", rw.deleteCookieMethod), nil
+	case "set_header":
+		return starlark.NewBuiltin("set_header", rw.setHeaderMethod), nil
+	case "get_header":
+		return starlark.NewBuiltin("get_header", rw.getHeaderMethod), nil
+	default:
+		return nil, starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
 	}
 }
 
-// Struct returns a Starlark struct representation of the Response
-func (r *Response) Struct() *starlarkstruct.Struct {
-	// Create headers dict using helper
-	headers := createMultiValueDict(r.Headers)
-
-	sd := starlark.StringDict{
-		"status_code":   starlark.MakeInt(r.StatusCode),
-		"headers":       headers,
-		"body":          starlark.String(r.Body),
-		"set_cookie":    starlark.NewBuiltin("set_cookie", r.SetCookie),
-		"delete_cookie": starlark.NewBuiltin("delete_cookie", r.DeleteCookie),
-	}
-	return starlarkstruct.FromStringDict(starlark.String("Response"), sd)
+// AttrNames returns the list of available attributes
+func (rw *ResponseWrapper) AttrNames() []string {
+	return []string{"status_code", "headers", "body", "file_path", "set_cookie", "delete_cookie", "set_header", "get_header"}
 }
 
-// Starlark-accessible methods
+// SetField sets the value of the specified field
+func (rw *ResponseWrapper) SetField(name string, value starlark.Value) error {
+	switch name {
+	case "status_code":
+		if statusInt, ok := value.(starlark.Int); ok {
+			if status, ok := statusInt.Int64(); ok {
+				rw.response.StatusCode = int(status)
+				return nil
+			}
+		}
+		return fmt.Errorf("status_code must be an integer")
+	case "headers":
+		if headersDict, ok := value.(*starlark.Dict); ok {
+			// Clear existing headers and set new ones
+			rw.response.Headers = make(map[string]string)
+			for _, item := range headersDict.Items() {
+				key, keyOk := item[0].(starlark.String)
+				val, valOk := item[1].(starlark.String)
+				if keyOk && valOk {
+					rw.response.Headers[string(key)] = string(val)
+				}
+			}
+			return nil
+		}
+		return fmt.Errorf("headers must be a dict")
+	case "body":
+		if bodyStr, ok := value.(starlark.String); ok {
+			rw.response.Body = string(bodyStr)
+			return nil
+		}
+		return fmt.Errorf("body must be a string")
+	case "file_path":
+		if pathStr, ok := value.(starlark.String); ok {
+			rw.response.FilePath = string(pathStr)
+			return nil
+		}
+		return fmt.Errorf("file_path must be a string")
+	default:
+		return starlark.NoSuchAttrError(fmt.Sprintf("%s has no .%s attribute", rw.Type(), name))
+	}
+}
 
-// SetCookie sets a cookie on the response
-func (r *Response) SetCookie(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name, value starlark.String
-	var maxAge starlark.Int
-	var path, domain starlark.String
-	var secure, httpOnly starlark.Bool
+// setCookieMethod handles the set_cookie() method call
+func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		name     string
+		value    string
+		maxAge   starlark.Value = starlark.None
+		path                    = starlark.String("/")
+		domain                  = starlark.String("")
+		secure                  = starlark.Bool(false)
+		httpOnly                = starlark.Bool(true)
+	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name", &name,
@@ -61,123 +159,109 @@ func (r *Response) SetCookie(thread *starlark.Thread, b *starlark.Builtin, args 
 		"secure?", &secure,
 		"http_only?", &httpOnly,
 	); err != nil {
-		return starlark.None, err
+		return nil, err
 	}
 
-	cookie := &http.Cookie{
-		Name:     name.GoString(),
-		Value:    value.GoString(),
-		Path:     path.GoString(),
-		Domain:   domain.GoString(),
-		Secure:   bool(secure),
-		HttpOnly: bool(httpOnly),
+	cookie := fmt.Sprintf("%s=%s; Path=%s", name, value, string(path))
+
+	if string(domain) != "" {
+		cookie += fmt.Sprintf("; Domain=%s", string(domain))
 	}
 
-	if maxAge != (starlark.Int{}) {
-		if maxAgeInt, ok := maxAge.Int64(); ok {
-			cookie.MaxAge = int(maxAgeInt)
+	if maxAge != starlark.None {
+		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
+			if age, ok := maxAgeInt.Int64(); ok {
+				cookie += fmt.Sprintf("; Max-Age=%d", age)
+			}
 		}
 	}
 
-	cookieStr := cookie.String()
-	if r.Headers == nil {
-		r.Headers = make(map[string][]string)
+	if bool(secure) {
+		cookie += "; Secure"
 	}
-	r.Headers["Set-Cookie"] = append(r.Headers["Set-Cookie"], cookieStr)
+
+	if bool(httpOnly) {
+		cookie += "; HttpOnly"
+	}
+
+	// Add to Set-Cookie header
+	if existing, exists := rw.response.Headers["Set-Cookie"]; exists {
+		rw.response.Headers["Set-Cookie"] = existing + ", " + cookie
+	} else {
+		rw.response.Headers["Set-Cookie"] = cookie
+	}
 
 	return starlark.None, nil
 }
 
-// DeleteCookie deletes a cookie
-func (r *Response) DeleteCookie(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
-	var name starlark.String
-	var path, domain starlark.String
+// deleteCookieMethod handles the delete_cookie() method call
+func (rw *ResponseWrapper) deleteCookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		name   string
+		path   = starlark.String("/")
+		domain = starlark.String("")
+	)
 
 	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
 		"name", &name,
 		"path?", &path,
 		"domain?", &domain,
 	); err != nil {
-		return starlark.None, err
+		return nil, err
 	}
 
-	cookie := &http.Cookie{
-		Name:    name.GoString(),
-		Value:   "",
-		Path:    path.GoString(),
-		Domain:  domain.GoString(),
-		MaxAge:  -1,
-		Expires: time.Unix(0, 0),
+	cookie := fmt.Sprintf("%s=; Path=%s; Max-Age=0", name, string(path))
+
+	if string(domain) != "" {
+		cookie += fmt.Sprintf("; Domain=%s", string(domain))
 	}
 
-	cookieStr := cookie.String()
-	if r.Headers == nil {
-		r.Headers = make(map[string][]string)
+	// Add to Set-Cookie header
+	if existing, exists := rw.response.Headers["Set-Cookie"]; exists {
+		rw.response.Headers["Set-Cookie"] = existing + ", " + cookie
+	} else {
+		rw.response.Headers["Set-Cookie"] = cookie
 	}
-	r.Headers["Set-Cookie"] = append(r.Headers["Set-Cookie"], cookieStr)
 
 	return starlark.None, nil
 }
 
-// GetStatusCode returns the status code
-func (r *Response) GetStatusCode() starlark.Int {
-	return starlark.MakeInt(r.StatusCode)
-}
-
-// FromStarlarkStruct converts a Starlark Response struct back to a Go Response object
-func ResponseFromStarlarkStruct(val starlark.Value) (*Response, error) {
-	// If it's a struct, extract the fields
-	if struct_, ok := val.(*starlarkstruct.Struct); ok {
-		resp := &Response{
-			Headers: make(map[string][]string),
-		}
-
-		// Extract status_code
-		if statusVal, err := struct_.Attr("status_code"); err == nil {
-			if statusInt, ok := statusVal.(starlark.Int); ok {
-				if status64, ok := statusInt.Int64(); ok {
-					resp.StatusCode = int(status64)
-				}
-			}
-		}
-
-		// Extract headers
-		if headersVal, err := struct_.Attr("headers"); err == nil {
-			if headersDict, ok := headersVal.(*starlark.Dict); ok {
-				iter := headersDict.Iterate()
-				defer iter.Done()
-				var k starlark.Value
-				for iter.Next(&k) {
-					v, _, err := headersDict.Get(k)
-					if err != nil {
-						continue
-					}
-					keyStr := dataconv.StarString(k)
-					valueStr := dataconv.StarString(v)
-					if keyStr != "" {
-						resp.Headers[keyStr] = []string{valueStr}
-					}
-				}
-			}
-		}
-
-		// Extract body
-		if bodyVal, err := struct_.Attr("body"); err == nil {
-			resp.Body = dataconv.StarString(bodyVal)
-		}
-
-		return resp, nil
-	}
-
-	// Try to unmarshal as a fallback
-	goValue, err := dataconv.Unmarshal(val)
-	if err != nil {
+// setHeaderMethod handles the set_header() method call
+func (rw *ResponseWrapper) setHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name, value string
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"name", &name,
+		"value", &value,
+	); err != nil {
 		return nil, err
 	}
 
-	if resp, ok := goValue.(*Response); ok {
-		return resp, nil
+	if rw.response.Headers == nil {
+		rw.response.Headers = make(map[string]string)
+	}
+	rw.response.Headers[name] = value
+
+	return starlark.None, nil
+}
+
+// getHeaderMethod handles the get_header() method call
+func (rw *ResponseWrapper) getHeaderMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var name string
+	var defaultValue starlark.Value = starlark.None
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs,
+		"name", &name,
+		"default?", &defaultValue,
+	); err != nil {
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("cannot convert %T to Response", goValue)
+	if rw.response.Headers == nil {
+		return defaultValue, nil
+	}
+
+	if value, exists := rw.response.Headers[name]; exists {
+		return starlark.String(value), nil
+	}
+
+	return defaultValue, nil
 }
