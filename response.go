@@ -21,6 +21,10 @@ type Response struct {
 	Headers    map[string]string `json:"headers"`
 	Body       string            `json:"body"`
 	FilePath   string            `json:"file_path,omitempty"`
+	// Cookies holds Set-Cookie header values separately from Headers, because
+	// Set-Cookie is not comma-combinable: each cookie must be emitted as its
+	// own header line. applyResponse writes one Add("Set-Cookie", v) per entry.
+	Cookies []string `json:"cookies,omitempty"`
 }
 
 // ResponseWrapper wraps the Response struct to provide Starlark-compatible interface.
@@ -184,12 +188,8 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 		cookie += "; HttpOnly"
 	}
 
-	// Add to Set-Cookie header
-	if existing, exists := rw.response.Headers["Set-Cookie"]; exists {
-		rw.response.Headers["Set-Cookie"] = existing + ", " + cookie
-	} else {
-		rw.response.Headers["Set-Cookie"] = cookie
-	}
+	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.
+	rw.response.Cookies = append(rw.response.Cookies, cookie)
 
 	return starlark.None, nil
 }
@@ -216,12 +216,8 @@ func (rw *ResponseWrapper) deleteCookieMethod(thread *starlark.Thread, b *starla
 		cookie += fmt.Sprintf("; Domain=%s", string(domain))
 	}
 
-	// Add to Set-Cookie header
-	if existing, exists := rw.response.Headers["Set-Cookie"]; exists {
-		rw.response.Headers["Set-Cookie"] = existing + ", " + cookie
-	} else {
-		rw.response.Headers["Set-Cookie"] = cookie
-	}
+	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.
+	rw.response.Cookies = append(rw.response.Cookies, cookie)
 
 	return starlark.None, nil
 }

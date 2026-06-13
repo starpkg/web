@@ -7,11 +7,15 @@ package web
 // Sections:
 //   - response builders: response / json_response / text_response / html_response
 //   - middleware constructors: a couple of m.* builtins return MiddlewareWrappers
+//   - cookies: set_cookie/delete_cookie produce distinct Set-Cookie header lines
 
 import (
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
+	"github.com/gin-gonic/gin"
 	"go.starlark.net/starlark"
 )
 
@@ -117,4 +121,62 @@ func TestMiddlewareConstructors(t *testing.T) {
 			t.Fatalf("expected *MiddlewareWrapper, got %T", v)
 		}
 	})
+}
+
+// --- cookies -----------------------------------------------------------------
+
+// Two set_cookie calls must accumulate two distinct cookies (Set-Cookie is not
+// comma-combinable), not get joined into one mangled header value.
+func TestResponseSetCookieAccumulates(t *testing.T) {
+	rw := NewResponseWrapper(&Response{StatusCode: 200, Headers: map[string]string{}})
+	b := starlark.NewBuiltin("set_cookie", rw.setCookieMethod)
+
+	if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("a"), starlark.String("1")}, nil); err != nil {
+		t.Fatalf("set_cookie(a): %v", err)
+	}
+	if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("b"), starlark.String("2")}, nil); err != nil {
+		t.Fatalf("set_cookie(b): %v", err)
+	}
+
+	if len(rw.response.Cookies) != 2 {
+		t.Fatalf("expected 2 cookies, got %d: %v", len(rw.response.Cookies), rw.response.Cookies)
+	}
+	// Cookies must not be smuggled into the flat Headers map.
+	if v, ok := rw.response.Headers["Set-Cookie"]; ok {
+		t.Errorf("Set-Cookie must not be stored in Headers, found %q", v)
+	}
+	if !strings.HasPrefix(rw.response.Cookies[0], "a=1") {
+		t.Errorf("first cookie = %q, want it to start with a=1", rw.response.Cookies[0])
+	}
+	if !strings.HasPrefix(rw.response.Cookies[1], "b=2") {
+		t.Errorf("second cookie = %q, want it to start with b=2", rw.response.Cookies[1])
+	}
+}
+
+// applyResponse must emit one Set-Cookie header line per cookie, so a client
+// sees two distinct cookies rather than a single comma-joined value.
+func TestApplyResponseEmitsDistinctSetCookieLines(t *testing.T) {
+	gin.SetMode(gin.TestMode)
+	rec := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(rec)
+	c.Request = httptest.NewRequest(http.MethodGet, "/", nil)
+
+	s := newServer(NewModule(), "localhost", 0)
+	resp := &Response{
+		StatusCode: 200,
+		Headers:    map[string]string{},
+		Body:       "ok",
+		Cookies:    []string{"a=1; Path=/", "b=2; Path=/"},
+	}
+	s.applyResponse(c, resp)
+
+	got := rec.Result().Header["Set-Cookie"]
+	if len(got) != 2 {
+		t.Fatalf("expected 2 Set-Cookie header lines, got %d: %v", len(got), got)
+	}
+	if got[0] != "a=1; Path=/" || got[1] != "b=2; Path=/" {
+		t.Errorf("Set-Cookie lines = %v, want [a=1; Path=/ b=2; Path=/]", got)
+	}
 }
