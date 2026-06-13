@@ -4,10 +4,13 @@ package web
 //
 // Sections:
 //   - bind guardrail (PKG-08): default-deny binding to non-loopback addresses
+//   - use() argument validation (PKG-08, B2): no host panic on srv.use() with no args
 
 import (
 	"strings"
 	"testing"
+
+	"go.starlark.net/starlark"
 )
 
 // --- bind guardrail (PKG-08) -------------------------------------------------
@@ -91,5 +94,52 @@ func TestServerBindGuardOptIn(t *testing.T) {
 	server := newServer(module, "0.0.0.0", 0)
 	if err := server.checkBindAllowed(); err != nil {
 		t.Errorf("checkBindAllowed() with allow_public_bind=true: unexpected error: %v", err)
+	}
+}
+
+// --- use() argument validation (B2) ------------------------------------------
+
+// srv.use() with no arguments previously indexed args[0] unconditionally,
+// panicking the host. It must now return a clean error and never panic.
+func TestServerUseRequiresMiddlewareArg(t *testing.T) {
+	sw := NewServerWrapper(newServer(NewModule(), "localhost", 0))
+	b := starlark.NewBuiltin("use", sw.use)
+
+	cases := []struct {
+		name   string
+		args   starlark.Tuple
+		kwargs []starlark.Tuple
+	}{
+		{"no args", nil, nil},
+		{"too many args", starlark.Tuple{starlark.String("a"), starlark.String("b")}, nil},
+		{"keyword arg", nil, []starlark.Tuple{{starlark.String("middleware"), starlark.None}}},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			// Recover guards against a regression to the panicking form.
+			defer func() {
+				if r := recover(); r != nil {
+					t.Fatalf("use(%s) panicked: %v", c.name, r)
+				}
+			}()
+			ret, err := sw.use(&starlark.Thread{}, b, c.args, c.kwargs)
+			if err == nil {
+				t.Fatalf("use(%s): expected error, got nil (ret=%v)", c.name, ret)
+			}
+		})
+	}
+}
+
+// A single valid middleware argument is accepted (delegates to use_for "/*").
+func TestServerUseAcceptsSingleMiddleware(t *testing.T) {
+	sw := NewServerWrapper(newServer(NewModule(), "localhost", 0))
+	b := starlark.NewBuiltin("use", sw.use)
+
+	mw := NewMiddlewareWrapper(loggingMiddleware(""))
+	if _, err := sw.use(&starlark.Thread{}, b, starlark.Tuple{mw}, nil); err != nil {
+		t.Fatalf("use(middleware): unexpected error: %v", err)
+	}
+	if len(sw.server.middleware) != 1 {
+		t.Errorf("expected 1 registered middleware, got %d", len(sw.server.middleware))
 	}
 }
