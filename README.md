@@ -21,7 +21,7 @@ The `web` module provides a comprehensive web framework for Starlark that enable
 ## Installation
 
 ```bash
-go get github.com/1set/starpkg/web
+go get github.com/starpkg/web
 ```
 
 ## Configuration
