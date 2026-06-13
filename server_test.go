@@ -5,8 +5,11 @@ package web
 // Sections:
 //   - bind guardrail (PKG-08): default-deny binding to non-loopback addresses
 //   - use() argument validation (PKG-08, B2): no host panic on srv.use() with no args
+//   - Start() bind errors: a failed listen must surface, not be swallowed
 
 import (
+	"net"
+	"strconv"
 	"strings"
 	"testing"
 
@@ -141,5 +144,48 @@ func TestServerUseAcceptsSingleMiddleware(t *testing.T) {
 	}
 	if len(sw.server.middleware) != 1 {
 		t.Errorf("expected 1 registered middleware, got %d", len(sw.server.middleware))
+	}
+}
+
+// --- Start() bind errors -----------------------------------------------------
+
+// freeLoopbackPort grabs an OS-assigned loopback port and releases it so the
+// caller can re-bind it on a known fixed number.
+func freeLoopbackPort(t *testing.T) int {
+	t.Helper()
+	l, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving a free port: %v", err)
+	}
+	defer l.Close()
+	return l.Addr().(*net.TCPAddr).Port
+}
+
+// A failed bind (the port is already taken) must surface from Start() instead
+// of being swallowed, and IsRunning() must report false rather than lie.
+func TestServerStartReportsBindError(t *testing.T) {
+	port := freeLoopbackPort(t)
+
+	first := newServer(NewModule(), "127.0.0.1", port)
+	if err := first.Start(); err != nil {
+		t.Fatalf("first Start() on free port %d: unexpected error: %v", port, err)
+	}
+	defer func() { _ = first.Stop() }()
+	if !first.IsRunning() {
+		t.Fatalf("first server should be running after a successful Start()")
+	}
+
+	// A second server on the SAME fixed port can't bind.
+	second := newServer(NewModule(), "127.0.0.1", port)
+	err := second.Start()
+	if err == nil {
+		_ = second.Stop()
+		t.Fatalf("second Start() on busy port %d: expected a bind error, got nil", port)
+	}
+	if !strings.Contains(err.Error(), strconv.Itoa(port)) && !strings.Contains(err.Error(), "address already in use") && !strings.Contains(err.Error(), "bind") {
+		t.Logf("note: bind error did not mention the port/bind: %v", err)
+	}
+	if second.IsRunning() {
+		t.Errorf("second server must not report running after a failed bind")
 	}
 }

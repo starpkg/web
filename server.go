@@ -42,6 +42,7 @@ type Server struct {
 	engine             *gin.Engine
 	httpServer         *http.Server
 	running            bool
+	startErr           error   // Captures a failed ListenAndServe from Start()'s goroutine
 	module             *Module // Reference to module for config access
 	readTimeout        time.Duration
 	writeTimeout       time.Duration
@@ -396,6 +397,10 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 			for key, value := range customResponse.Headers {
 				c.Header(key, value)
 			}
+			// Each cookie is emitted as its own Set-Cookie line.
+			for _, cookie := range customResponse.Cookies {
+				c.Writer.Header().Add("Set-Cookie", cookie)
+			}
 
 			// Handle file response
 			if customResponse.FilePath != "" {
@@ -419,6 +424,11 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 	// Set headers
 	for key, value := range response.Headers {
 		c.Header(key, value)
+	}
+	// Each cookie is emitted as its own Set-Cookie line; Set-Cookie is not
+	// comma-combinable, so multiple cookies produce multiple header lines.
+	for _, cookie := range response.Cookies {
+		c.Writer.Header().Add("Set-Cookie", cookie)
 	}
 
 	// Handle file response
@@ -473,13 +483,14 @@ func (s *Server) checkBindAllowed() error {
 // without blocking the current thread, allowing for asynchronous server operation.
 func (s *Server) Start() error {
 	s.mu.Lock()
-	defer s.mu.Unlock()
 
 	if s.running {
+		s.mu.Unlock()
 		return fmt.Errorf("server is already running")
 	}
 
 	if err := s.checkBindAllowed(); err != nil {
+		s.mu.Unlock()
 		return err
 	}
 
@@ -492,16 +503,34 @@ func (s *Server) Start() error {
 		WriteTimeout: s.writeTimeout,
 	}
 
+	s.startErr = nil
+	s.running = true
+	httpServer := s.httpServer // Local copy so the goroutine doesn't read s.httpServer unlocked
+	s.mu.Unlock()
+
 	go func() {
-		if err := s.httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
-			// Log error or handle it appropriately
+		// ListenAndServe blocks until Shutdown/Close (ErrServerClosed) or a bind
+		// failure. A bind failure must surface to Start(), not be swallowed, so
+		// is_running() can't lie about a server that never came up.
+		if err := httpServer.ListenAndServe(); err != nil && err != http.ErrServerClosed {
+			s.mu.Lock()
+			s.startErr = err
+			s.running = false
+			s.mu.Unlock()
 		}
 	}()
 
-	s.running = true
-
-	// Give server time to start
+	// Give the listener a moment to bind so an immediate failure (e.g. the port
+	// is already in use) is observable before Start() returns. The lock is
+	// released during the wait so the goroutine can record startErr.
 	time.Sleep(100 * time.Millisecond)
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.startErr != nil {
+		s.httpServer = nil
+		return s.startErr
+	}
 
 	return nil
 }
