@@ -3,6 +3,7 @@ package web
 import (
 	"context"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"sync"
@@ -46,6 +47,7 @@ type Server struct {
 	writeTimeout       time.Duration
 	maxBodySize        int64
 	serverHeader       string
+	allowPublicBind    bool          // When false, refuse to bind to a non-loopback address
 	middleware         []*Middleware // All middleware with path patterns
 	errorHandlers      *ErrorHandlerRegistry
 	ginMiddlewareAdded bool         // Flag to prevent multiple Gin middleware additions
@@ -66,6 +68,7 @@ func newServer(module *Module, host string, port int) *Server {
 
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 	serverHeader := module.ext.GetString(configKeyServerHeader)
+	allowPublicBind := module.ext.GetBool(configKeyAllowPublicBind)
 
 	// Set gin mode - ensure release mode by default to avoid debug output
 	if debugMode {
@@ -96,6 +99,7 @@ func newServer(module *Module, host string, port int) *Server {
 		writeTimeout:       writeTimeout,
 		maxBodySize:        maxBodySize,
 		serverHeader:       serverHeader,
+		allowPublicBind:    allowPublicBind,
 		middleware:         make([]*Middleware, 0),
 		errorHandlers:      NewErrorHandlerRegistry(),
 		ginMiddlewareAdded: false,
@@ -435,6 +439,35 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 // Server lifecycle methods
 
+// isLoopbackBindHost reports whether binding to host keeps the listener on the
+// loopback interface (i.e. unreachable from other machines). An empty host and
+// the wildcard addresses ("0.0.0.0", "::") are treated as non-loopback because
+// they expose the server on every interface. Unknown hostnames are treated
+// conservatively as non-loopback.
+func isLoopbackBindHost(host string) bool {
+	switch host {
+	case "":
+		return false
+	case "localhost":
+		return true
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.IsLoopback()
+	}
+	return false
+}
+
+// checkBindAllowed enforces the module-local default-deny guardrail: unless the
+// host opts in via allow_public_bind, the server refuses to listen on anything
+// other than the loopback interface. This keeps a server started from an
+// untrusted script off the network by default.
+func (s *Server) checkBindAllowed() error {
+	if s.allowPublicBind || isLoopbackBindHost(s.host) {
+		return nil
+	}
+	return fmt.Errorf("web: refusing to bind to non-loopback host %q; set allow_public_bind=true (or the web_allow_public_bind env var) to expose the server beyond localhost", s.host)
+}
+
 // Start starts the server in a goroutine.
 // This method begins listening for HTTP requests on the configured host and port
 // without blocking the current thread, allowing for asynchronous server operation.
@@ -444,6 +477,10 @@ func (s *Server) Start() error {
 
 	if s.running {
 		return fmt.Errorf("server is already running")
+	}
+
+	if err := s.checkBindAllowed(); err != nil {
+		return err
 	}
 
 	addr := s.host + ":" + strconv.Itoa(s.port)
@@ -499,6 +536,11 @@ func (s *Server) Run() error {
 	if s.running {
 		s.mu.Unlock()
 		return fmt.Errorf("server is already running")
+	}
+
+	if err := s.checkBindAllowed(); err != nil {
+		s.mu.Unlock()
+		return err
 	}
 
 	addr := s.host + ":" + strconv.Itoa(s.port)

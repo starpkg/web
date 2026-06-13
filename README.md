@@ -34,8 +34,26 @@ The web module supports the following configuration options:
 | `port` | `int` | `8080` | Server port |
 | `read_timeout` | `int` | `30` | Read timeout in seconds |
 | `write_timeout` | `int` | `30` | Write timeout in seconds |
-| `max_header_size` | `int` | `1048576` | Maximum header size in bytes |
-| `server_header` | `string` | `"Starlark-Web"` | Server header value |
+| `max_body_size` | `int` | `33554432` | Maximum request body size in bytes (32 MiB) |
+| `debug_mode` | `bool` | `false` | Enable Gin debug logging |
+| `server_header` | `string` | `"Starlark-Web/1.0"` | Server header value |
+| `allow_public_bind` | `bool` | `false` | Allow binding to a non-loopback (public) address |
+
+### Network exposure
+
+By default the server binds to `localhost`, and starting it on any non-loopback
+address (`0.0.0.0`, `::`, an empty host, or a public/LAN IP) is **refused** with
+an error. This keeps a server started from an untrusted script off the network.
+To expose it deliberately, opt in with `allow_public_bind=true` (or the
+`web_allow_public_bind` environment variable):
+
+```python
+srv = create_server(host="0.0.0.0", port=8080)
+srv.run()   # error: refusing to bind to non-loopback host "0.0.0.0"; set allow_public_bind=true ...
+```
+
+> Full host-level network capability gating (deny-by-policy) lives in the
+> sandbox runtime layer; this is the module-local guardrail.
 
 ## Basic Usage
 

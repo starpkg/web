@@ -24,6 +24,10 @@ const (
 	configKeyMaxBodySize  = "max_body_size"
 	configKeyDebugMode    = "debug_mode"
 	configKeyServerHeader = "server_header"
+	// configKeyAllowPublicBind gates binding to a non-loopback (publicly
+	// reachable) address. It defaults to false so a server started from an
+	// untrusted script stays on localhost unless the host explicitly opts in.
+	configKeyAllowPublicBind = "allow_public_bind"
 )
 
 var (
@@ -49,6 +53,7 @@ func NewModule() *Module {
 		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
 		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
 		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
+		genConfigOption(configKeyAllowPublicBind, "Allow binding to a non-loopback (public) address", false),
 	)
 }
 
@@ -71,6 +76,7 @@ func newModuleWithOptions(
 	maxBodySizeOpt *base.ConfigOption[int64],
 	debugModeOpt *base.ConfigOption[bool],
 	serverHeaderOpt *base.ConfigOption[string],
+	allowPublicBindOpt *base.ConfigOption[bool],
 ) *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		hostOpt,
@@ -80,6 +86,7 @@ func newModuleWithOptions(
 		maxBodySizeOpt,
 		debugModeOpt,
 		serverHeaderOpt,
+		allowPublicBindOpt,
 	)
 	return &Module{
 		cfgMod: cm,
