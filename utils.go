@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"net/http"
 	"strings"
-	"time"
 
 	"github.com/gin-gonic/gin"
 	"go.starlark.net/starlark"
@@ -185,36 +184,6 @@ func starlarkBoolToBool(value starlark.Value) (bool, error) {
 	return false, fmt.Errorf("value is not a boolean")
 }
 
-// starlarkStringToString converts a Starlark string to Go string
-func starlarkStringToString(value starlark.Value) (string, error) {
-	if strVal, ok := value.(starlark.String); ok {
-		return string(strVal), nil
-	}
-	return "", fmt.Errorf("value is not a string")
-}
-
-// starlarkListToIntSlice converts a Starlark list to Go int slice
-func starlarkListToIntSlice(list *starlark.List) ([]int, error) {
-	if list == nil {
-		return []int{}, nil
-	}
-
-	result := make([]int, list.Len())
-	for i := 0; i < list.Len(); i++ {
-		item := list.Index(i)
-		if intVal, ok := item.(starlark.Int); ok {
-			if val, ok := intVal.Int64(); ok {
-				result[i] = int(val)
-			} else {
-				return nil, fmt.Errorf("integer value at index %d too large", i)
-			}
-		} else {
-			return nil, fmt.Errorf("list item at index %d is not an integer", i)
-		}
-	}
-	return result, nil
-}
-
 // max returns the maximum of two integers
 func max(a, b int) int {
 	if a > b {
@@ -245,28 +214,9 @@ func isCompressibleContentType(contentType string) bool {
 	return false
 }
 
-// formatBytes formats bytes into human readable format
-func formatBytes(bytes int64) string {
-	const unit = 1024
-	if bytes < unit {
-		return fmt.Sprintf("%d B", bytes)
-	}
-	div, exp := int64(unit), 0
-	for n := bytes / unit; n >= unit; n /= unit {
-		div *= unit
-		exp++
-	}
-	return fmt.Sprintf("%.1f %cB", float64(bytes)/float64(div), "KMGTPE"[exp])
-}
-
 // createRateLimitKey creates a key for rate limiting
 func createRateLimitKey(prefix, identifier string) string {
 	return fmt.Sprintf("%s:%s", prefix, identifier)
-}
-
-// getCurrentTimeWindow returns the current time window for rate limiting
-func getCurrentTimeWindow(windowSize int) int64 {
-	return time.Now().Unix() / int64(windowSize)
 }
 
 // createTooManyRequestsResponse creates a 429 Too Many Requests response
@@ -311,16 +261,5 @@ func createNotAcceptableResponse(message string) *Response {
 			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
 		},
 		Body: fmt.Sprintf(`{"error":"Not acceptable","message":%q,"code":%d}`, message, http.StatusNotAcceptable),
-	}
-}
-
-// createUnsupportedMediaTypeResponse creates a 415 Unsupported Media Type response
-func createUnsupportedMediaTypeResponse(contentType string) *Response {
-	return &Response{
-		StatusCode: http.StatusUnsupportedMediaType,
-		Headers: map[string]string{
-			canonicalHeader(HeaderContentType): MIMEApplicationJSON,
-		},
-		Body: fmt.Sprintf(`{"error":"Unsupported media type","content_type":%q,"code":%d}`, contentType, http.StatusUnsupportedMediaType),
 	}
 }

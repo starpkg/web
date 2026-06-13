@@ -735,6 +735,10 @@ func (sw *ServerWrapper) group(thread *starlark.Thread, b *starlark.Builtin, arg
 // use handles the use() method call for adding global middleware.
 // Global middleware uses the pattern "/*" to match all paths.
 func (sw *ServerWrapper) use(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	// Require exactly one positional middleware argument; reject keyword args.
+	if len(args) != 1 || len(kwargs) > 0 {
+		return starlark.None, fmt.Errorf("%s: got %d arguments, want exactly 1 positional middleware", b.Name(), len(args)+len(kwargs))
+	}
 	// Delegate to use_for with global pattern "/*"
 	return sw.useFor(thread, b, starlark.Tuple{starlark.String("/*"), args[0]}, kwargs)
 }

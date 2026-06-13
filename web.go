@@ -5,6 +5,7 @@ package web
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -64,7 +65,7 @@ func genConfigOption[T any](name, description string, defaultValue T) *base.Conf
 	return base.NewConfigOption(defaultValue).
 		WithName(name).
 		WithDescription(description).
-		WithEnvVar(fmt.Sprintf("%s_%s", ModuleName, name))
+		WithEnvVar(strings.ToUpper(ModuleName + "_" + name))
 }
 
 // newModuleWithOptions creates a Module with the given configuration options

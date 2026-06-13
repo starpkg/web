@@ -173,7 +173,7 @@ def main():
     
     def api_key_protected(req):
         # This route is protected by API key auth middleware
-        api_key_info = req.api_key()
+        api_key_info = req.get_header("X-API-Key")
         username = api_key_info if api_key_info != None else "unknown"
         
         return html_response("""

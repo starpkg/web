@@ -51,16 +51,16 @@ func TestConfigurationUsage(t *testing.T) {
 
 // TestEnvironmentVariableConfiguration tests that environment variables are properly used
 func TestEnvironmentVariableConfiguration(t *testing.T) {
-	// Set environment variables
-	os.Setenv("web_host", "env-host")
-	os.Setenv("web_port", "8888")
-	os.Setenv("web_read_timeout", "120")
-	os.Setenv("web_write_timeout", "90")
+	// Set environment variables (env vars are uppercased: WEB_<NAME>)
+	os.Setenv("WEB_HOST", "env-host")
+	os.Setenv("WEB_PORT", "8888")
+	os.Setenv("WEB_READ_TIMEOUT", "120")
+	os.Setenv("WEB_WRITE_TIMEOUT", "90")
 	defer func() {
-		os.Unsetenv("web_host")
-		os.Unsetenv("web_port")
-		os.Unsetenv("web_read_timeout")
-		os.Unsetenv("web_write_timeout")
+		os.Unsetenv("WEB_HOST")
+		os.Unsetenv("WEB_PORT")
+		os.Unsetenv("WEB_READ_TIMEOUT")
+		os.Unsetenv("WEB_WRITE_TIMEOUT")
 	}()
 
 	// Create a module that should pick up environment variables
