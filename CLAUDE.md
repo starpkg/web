@@ -131,9 +131,9 @@ The iron rule is **opt-in / default-off so old scripts run identically**.
 
 Group by functional goal — **do not add one `*_test.go` per fix.** The thematic
 files are: `config_test.go` (default/env/programmatic configuration + timeouts),
-`server_test.go` (bind guard, `Start()` error surfacing, `use()` arity,
-Set-Cookie line emission), `response_test.go` (response builders + cookie
-accumulation), `path_matcher_test.go` (the matcher), and `example_test.go`
+`server_test.go` (bind guard, `Start()` error surfacing, `use()` arity),
+`response_test.go` (response builders, middleware constructors, and Set-Cookie
+line accumulation), `path_matcher_test.go` (the matcher), and `example_test.go`
 (the `../test/web` integration harness `TestStarlarkScripts`, the runnable
 `Example_basicWebServer`, and the module smoke test). Add a new test as a
 **section in the matching file**, not a new file. Tests are table/example-driven;

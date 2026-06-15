@@ -1,6 +1,7 @@
 // Package web provides a Starlark module for server-side web applications.
-// It offers a Flask-inspired API for building HTTP servers with routing, middleware,
-// request/response handling, and session management capabilities.
+// It offers a Flask-inspired API for building HTTP servers with routing, route
+// groups, path-pattern middleware, request/response handling, pluggable
+// authentication, and custom error handlers, built on top of gin.
 package web
 
 import (

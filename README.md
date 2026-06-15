@@ -210,7 +210,8 @@ request context under `json_data`, and tags JSON-looking response bodies with
 
 gzip response compression when the client sends `Accept-Encoding: gzip`,
 the body is at least `min_size` bytes, and its content type is compressible.
-`level` is clamped to `1..9`; empty `types` defaults to the common text/JSON set.
+A `level` outside `1..9` falls back to the default `6`; empty `types` defaults
+to the common text/JSON set.
 
 #### `rate_limit_middleware(requests?=100, window?=60, key_func?=None)`
 
