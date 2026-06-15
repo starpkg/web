@@ -18,6 +18,7 @@ var (
 // HTTPMethod represents the supported HTTP methods
 type HTTPMethod string
 
+// Supported HTTP methods, used by route registration.
 const (
 	MethodGet     HTTPMethod = http.MethodGet
 	MethodPost    HTTPMethod = http.MethodPost
