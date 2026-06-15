@@ -1,10 +1,42 @@
-# 🌐 `web` — Flask-inspired Web Framework for Starlark
+# 🌐 `web` — Flask-inspired web server for Starlark
 
 [![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/web.svg)](https://pkg.go.dev/github.com/starpkg/web)
+[![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
+[![Go Report Card](https://goreportcard.com/badge/github.com/starpkg/web)](https://goreportcard.com/report/github.com/starpkg/web)
 
 Build server-side HTTP applications from Starlark with a Flask-inspired API:
-routing, path-pattern middleware, request/response helpers, and pluggable
-authentication, on top of [gin](https://github.com/gin-gonic/gin).
+routing, route groups, path-pattern middleware, request/response helpers,
+pluggable authentication, and custom error handlers — on top of
+[gin](https://github.com/gin-gonic/gin).
+
+Within the Star\* ecosystem `starpkg` is *"support for necessary **local**
+operations plus simple abstractions over common **online** services, for ease
+of use."* `web` is a **local capability**: it stands up an HTTP listener inside
+the host process so a script can *serve* requests (the inverse of an HTTP
+*client* — for outbound calls use starlet's `http` module). Because a listening
+socket is a host resource, the module ships a default-deny **loopback bind**
+guardrail (see [Hardening](#hardening)).
+
+## Script-facing API at a glance
+
+Module functions: `create_server`, `response`, `json_response`,
+`html_response`, `text_response`, `file_response`, `send_file`, `send_data`,
+`redirect`, `error_response`, `api_key_auth`, `bearer_auth`, `basic_auth`,
+`cors_middleware`, `logging_middleware`, `security_headers_middleware`,
+`timing_middleware`, `json_middleware`, `compression_middleware`,
+`rate_limit_middleware`, `cache_middleware`, `request_size_middleware`.
+
+Server methods: `get`, `post`, `put`, `delete`, `patch`, `options`, `head`,
+`route`, `group`, `use`, `use_for`, `error_handler`, `start`, `stop`, `run`,
+`is_running`.
+
+Request methods: `body`, `json`, `form`, `files`, `cookie`, `param`,
+`get_header`, `bearer_token`, `basic_auth`. Uploaded-file entries expose
+`read`.
+
+Response methods: `set_header`, `get_header`, `set_cookie`, `delete_cookie`.
+Authenticators expose `middleware`. Custom middleware receives a `next`
+callable. Each is detailed in the sections below.
 
 ## Installation
 
@@ -12,102 +44,348 @@ authentication, on top of [gin](https://github.com/gin-gonic/gin).
 go get github.com/starpkg/web
 ```
 
-## Functions
+## Quick start
 
-Module-level functions registered by `load("web", ...)`:
+```go
+package main
 
-| Function | Signature | Description |
-|----------|-----------|-------------|
-| `create_server` | `create_server(host?, port?, server_header?) -> Server` | Create an HTTP server. Falls back to configured host/port. |
-| `response` | `response(body, status?=200, headers?={}) -> Response` | Build a plain response. |
-| `json_response` | `json_response(data, status?=200, headers?={}) -> Response` | Encode `data` to JSON; sets `Content-Type: application/json`. |
-| `html_response` | `html_response(content, status?=200, headers?={}) -> Response` | HTML response; sets `Content-Type: text/html`. |
-| `text_response` | `text_response(text, status?=200) -> Response` | Plain-text response; sets `Content-Type: text/plain`. |
-| `file_response` | `file_response(filepath, content_type?, filename?) -> Response` | Serve a file from disk; `filename` adds a `Content-Disposition` attachment. |
-| `send_file` | `send_file(filepath, content_type?) -> Response` | Serve a file from disk. |
-| `send_data` | `send_data(data, filename, content_type?="application/octet-stream") -> Response` | Send raw bytes as an attachment. |
-| `redirect` | `redirect(location, status?=302) -> Response` | Redirect response with a `Location` header. |
-| `error_response` | `error_response(status, message?="") -> Response` | Error response with the given status and body. |
-| `api_key_auth` | `api_key_auth(keys?=[], header?="X-API-Key", query_param?="api_key") -> Authenticator` | API-key authenticator (checks header then query param). |
-| `bearer_auth` | `bearer_auth(validate_func, header?="Authorization") -> Authenticator` | Bearer-token authenticator; `validate_func(token)` returns user info or `None`. |
-| `basic_auth` | `basic_auth(users?={}, realm?="Restricted") -> Authenticator` | HTTP Basic authenticator from a `{username: password}` dict. |
-| `cors_middleware` | `cors_middleware(origins?=[], methods?=[], headers?=[], credentials?=False) -> Middleware` | Cross-Origin Resource Sharing headers. |
-| `logging_middleware` | `logging_middleware(format?="") -> Middleware` | Request logging. |
-| `security_headers_middleware` | `security_headers_middleware(frame_options?="DENY", content_type_options?="nosniff", xss_protection?="1; mode=block", hsts?="", csp?="", referrer_policy?="") -> Middleware` | Common security response headers. |
-| `timing_middleware` | `timing_middleware(header?="X-Response-Time") -> Middleware` | Adds a response-time header. |
-| `json_middleware` | `json_middleware() -> Middleware` | Enforces/normalizes JSON request/response handling. |
-| `compression_middleware` | `compression_middleware(level?=6, min_size?=1024, types?=[]) -> Middleware` | gzip response compression. |
-| `rate_limit_middleware` | `rate_limit_middleware(requests?=100, window?=60, key_func?=None) -> Middleware` | Per-key rate limiting; `key_func(req)` defaults to client IP. |
-| `cache_middleware` | `cache_middleware(max_age?=3600, private?=False, patterns?=[], vary?=[]) -> Middleware` | HTTP cache-control headers. |
-| `request_size_middleware` | `request_size_middleware(max_content_length?=10485760, max_url_length?=2048, max_headers?=100) -> Middleware` | Bounds request body/URL/header sizes. |
+import (
+    "github.com/1set/starlet"
+    "github.com/starpkg/web"
+)
 
-### Server methods
-
-A `Server` returned by `create_server` exposes:
-
-| Method | Description |
-|--------|-------------|
-| `srv.get/post/put/delete/patch/options/head(path, handler)` | Register a route for one HTTP method. |
-| `srv.route(methods, path, handler)` | Register a route for one or more methods (`methods` is a string or list of strings). |
-| `srv.group(prefix) -> RouteGroup` | Create a route group sharing a path prefix. |
-| `srv.use(middleware)` | Add global middleware (shorthand for `use_for("/*", middleware)`). |
-| `srv.use_for(path_pattern, middleware)` | Add middleware for paths matching `path_pattern`. |
-| `srv.error_handler(status_codes, handler)` | Register a custom handler for one or more status codes. |
-| `srv.start()` / `srv.stop()` | Start/stop the server (non-blocking start). |
-| `srv.run()` | Start and block until the server stops. |
-| `srv.is_running() -> bool` | Whether the server is currently running. |
-
-### Request attributes and methods
-
-The `req` passed to a handler exposes properties:
-`req.method`, `req.url`, `req.path`, `req.host`, `req.remote`, `req.client_ip`,
-`req.proto`, `req.headers`, `req.query`, `req.context`; and methods:
-
-| Method | Description |
-|--------|-------------|
-| `req.body() -> str` | Raw request body. |
-| `req.json() -> value` | Parsed JSON body (or `None`). |
-| `req.form() -> dict` | Parsed form data. |
-| `req.files() -> dict` | Uploaded files (multipart). |
-| `req.cookie(name) -> str` | Cookie value (or `None`). |
-| `req.param(name) -> str` | Path parameter (or `None`). |
-| `req.get_header(name, default?=None) -> str` | Request header value. |
-| `req.bearer_token(header?="Authorization") -> str` | Extract a Bearer token (or `None`). |
-| `req.basic_auth() -> (user, pass)` | Basic-auth credentials tuple (or `None`). |
-
-### Response attributes and methods
-
-A `Response` exposes settable fields `status_code`, `headers`, `body`,
-`file_path`, and methods `set_header(name, value)`,
-`get_header(name, default?=None)`, `set_cookie(name, value, ...)`,
-`delete_cookie(name, path?, domain?)`. An `Authenticator` exposes
-`auth.middleware()`.
-
-## Usage
-
-```python
+func main() {
+    machine := starlet.NewWithNames(nil, []string{"go_idiomatic"}, nil)
+    machine.AddLazyloadModules(starlet.ModuleLoaderMap{
+        web.ModuleName: web.NewModule().LoadModule(),
+    })
+    _, err := machine.RunScript([]byte(`
 load("web", "create_server", "html_response", "json_response")
 
-def main():
-    srv = create_server(host="localhost", port=8080)
-
-    def home(req):
-        return html_response("<h1>Hello, World!</h1>")
-
-    def user_profile(req):
-        return json_response({"user_id": req.param("id"), "method": req.method})
-
-    srv.get("/", home)
-    srv.get("/users/{id}", user_profile)
-    srv.run()
-
-main()
+srv = create_server(host="localhost", port=8080)
+srv.get("/", lambda req: html_response("<h1>Hello, World!</h1>"))
+srv.get("/users/{id}", lambda req: json_response({"id": req.param("id")}))
+srv.run()
+`), nil)
+    if err != nil {
+        panic(err)
+    }
+}
 ```
+
+A script loads the module, calls `create_server` to get a server object,
+registers route handlers (each a `func(req)` returning a response), and starts
+it with `srv.start()` (non-blocking) or `srv.run()` (blocking).
+
+## Module functions
+
+These are registered into the module namespace by `load("web", ...)`.
+
+### Server
+
+#### `create_server(host?, port?, server_header?)`
+
+Creates an HTTP server. `host`/`port` fall back to the module configuration
+when omitted; `server_header` overrides the configured `Server` response header
+for this server. The port must be in `1..65535`. Returns a server object whose
+methods are documented under [Server object](#server-object).
+
+```python
+srv = create_server(host="localhost", port=8080)
+```
+
+### Response builders
+
+Each builder returns a response object that a handler returns to emit the HTTP
+response. Their settable fields and methods are documented under
+[Response object](#response-object).
+
+#### `response(body, status?=200, headers?={})`
+
+Builds a plain response from a string `body`, an optional `status` code, and an
+optional `{name: value}` `headers` dict. No `Content-Type` is forced; when none
+is set, the server sends `application/json` by default.
+
+#### `json_response(data, status?=200, headers?={})`
+
+Encodes `data` to JSON and sets `Content-Type: application/json`. If `data` is
+already a `string` or `bytes` it is sent verbatim; otherwise it is serialized
+(dicts, lists, numbers, …) via starlet's JSON encoder.
+
+#### `html_response(content, status?=200, headers?={})`
+
+HTML response; sets `Content-Type: text/html`.
+
+#### `text_response(text, status?=200)`
+
+Plain-text response; sets `Content-Type: text/plain`.
+
+#### `file_response(filepath, content_type?, filename?)`
+
+Serves the file at `filepath` from disk. `content_type` sets `Content-Type`;
+`filename` adds `Content-Disposition: attachment; filename=...` to prompt a
+download.
+
+#### `send_file(filepath, content_type?)`
+
+Serves the file at `filepath` from disk, optionally with an explicit
+`content_type`. Like `file_response` but without the attachment filename.
+
+#### `send_data(data, filename, content_type?="application/octet-stream")`
+
+Sends the in-memory string `data` as a download. `filename` is required and
+sets `Content-Disposition: attachment; filename=...`.
+
+#### `redirect(location, status?=302)`
+
+Redirect response carrying a `Location` header.
+
+#### `error_response(status, message?="")`
+
+Error response with the given `status` code and `message` body. (If a matching
+`error_handler` is registered on the server, that handler renders the body
+instead — see [`error_handler`](#srverror_handlerstatus_codes-handler).)
+
+### Authentication
+
+Each constructor returns an authenticator object exposing one method,
+[`middleware()`](#authenticators), which yields a middleware you attach with
+`srv.use_for(...)`. On failure the middleware short-circuits with a 401 (Basic
+auth also sends a `WWW-Authenticate` challenge); on success it stores the user
+info in the request context under `auth_user`.
+
+#### `api_key_auth(keys?=[], header?="X-API-Key", query_param?="api_key")`
+
+API-key authenticator. Accepts a key supplied either in the named `header` or
+in the `query_param` query string parameter, matched against the allowed
+`keys` list.
+
+#### `bearer_auth(validate_func, header?="Authorization")`
+
+Bearer-token authenticator. The `Bearer` scheme prefix (and its trailing
+space) is stripped from the `Authorization` header (a custom `header` is used
+as-is or also de-prefixed),
+then `validate_func(token)` is called: return user info on success, or `None`
+to reject.
+
+#### `basic_auth(users?={}, realm?="Restricted")`
+
+HTTP Basic authenticator from a `{username: password}` dict. The `realm`
+appears in the `WWW-Authenticate` challenge.
 
 ### Middleware
 
-All middleware carries a path pattern. `srv.use(mw)` is shorthand for
-`srv.use_for("/*", mw)`.
+Each constructor returns a middleware object you attach with `srv.use(mw)`
+(all paths) or `srv.use_for(pattern, mw)`. See [Custom middleware](#custom-middleware)
+for the path-pattern and custom-middleware model.
+
+#### `cors_middleware(origins?=[], methods?=[], headers?=[], credentials?=False)`
+
+Cross-Origin Resource Sharing. Empty `origins`/`methods`/`headers` default to
+`*` / the common method set / `Content-Type, Authorization`. Handles
+preflight `OPTIONS` with a `204` and echoes the configured headers.
+
+#### `logging_middleware(format?="")`
+
+Logs each request to stdout. `format` defaults to
+`{method} {path} {status} {duration}ms`; the `{method}`, `{path}`, `{status}`,
+and `{duration}` placeholders are substituted.
+
+#### `security_headers_middleware(frame_options?="DENY", content_type_options?="nosniff", xss_protection?="1; mode=block", hsts?="", csp?="", referrer_policy?="")`
+
+Adds common security response headers (`X-Frame-Options`,
+`X-Content-Type-Options`, `X-XSS-Protection`, and — when non-empty —
+`Strict-Transport-Security`, `Content-Security-Policy`, `Referrer-Policy`).
+
+#### `timing_middleware(header?="X-Response-Time")`
+
+Records handler duration and writes it to the named response `header`.
+
+#### `json_middleware()`
+
+Parses a JSON request body (when `Content-Type: application/json`) into the
+request context under `json_data`, and tags JSON-looking response bodies with
+`Content-Type: application/json` when unset.
+
+#### `compression_middleware(level?=6, min_size?=1024, types?=[])`
+
+gzip response compression when the client sends `Accept-Encoding: gzip`,
+the body is at least `min_size` bytes, and its content type is compressible.
+A `level` outside `1..9` falls back to the default `6`; empty `types` defaults
+to the common text/JSON set.
+
+#### `rate_limit_middleware(requests?=100, window?=60, key_func?=None)`
+
+Per-key rate limiting: at most `requests` per `window` seconds, keyed by
+`key_func(req)` (defaults to the client IP). Over the limit returns `429` with
+a `Retry-After`; otherwise sets `X-RateLimit-*` headers. State is held in an
+in-process memory store.
+
+#### `cache_middleware(max_age?=3600, private?=False, patterns?=[], vary?=[])`
+
+Adds `Cache-Control` (and optional `Vary`) headers to `GET` responses. When
+`patterns` is non-empty, only matching request paths are affected; `private`
+selects `private` over `public`.
+
+#### `request_size_middleware(max_content_length?=10485760, max_url_length?=2048, max_headers?=100)`
+
+Rejects oversized requests: `413` for a body over `max_content_length`, `414`
+for a URL over `max_url_length`, `406` for more than `max_headers` headers.
+
+## Server object
+
+The object returned by `create_server` registers routes and controls the
+server lifecycle.
+
+### Routing
+
+| Method | Description |
+|--------|-------------|
+| `srv.get(path, handler)` | Register a `GET` route. |
+| `srv.post(path, handler)` | Register a `POST` route. |
+| `srv.put(path, handler)` | Register a `PUT` route. |
+| `srv.delete(path, handler)` | Register a `DELETE` route. |
+| `srv.patch(path, handler)` | Register a `PATCH` route. |
+| `srv.options(path, handler)` | Register an `OPTIONS` route. |
+| `srv.head(path, handler)` | Register a `HEAD` route. |
+
+Path parameters use Flask-style braces, e.g. `/users/{id}`, read back in the
+handler with `req.param("id")`.
+
+#### `srv.route(methods, path, handler)`
+
+Registers one `handler` for one or more HTTP methods. `methods` is a method
+string (e.g. `"GET"`) or a list of method strings.
+
+#### `srv.group(prefix)`
+
+Returns a route group sharing the `prefix`. The group exposes the same
+per-method registrars (`grp.get(path, handler)`, `grp.post(...)`, … for
+`put`/`delete`/`patch`/`options`/`head`).
+
+### Middleware and error handlers
+
+#### `srv.use(middleware)`
+
+Adds global middleware (matches every path). Shorthand for
+`srv.use_for("/*", middleware)`. Takes exactly one positional argument.
+
+#### `srv.use_for(path_pattern, middleware)`
+
+Adds `middleware` for requests whose path matches `path_pattern`. The argument
+may be a middleware object (from a constructor above or an
+[authenticator's `middleware()`](#authenticators)) or a custom callable
+`func(req, next)` — see [Custom middleware](#custom-middleware).
+
+#### `srv.error_handler(status_codes, handler)`
+
+Registers a custom `handler(req)` (returning a response) for one status code or
+a list of status codes. The server invokes it whenever a response with a
+matching status (including built-in `404`/`405`) is produced.
+
+### Lifecycle
+
+| Method | Description |
+|--------|-------------|
+| `srv.start()` | Start listening in the background (non-blocking); surfaces an immediate bind failure. |
+| `srv.stop()` | Gracefully shut the server down. |
+| `srv.run()` | Start and block until the server stops. |
+| `srv.is_running()` | Return whether the server is currently running (`bool`). |
+
+## Request object
+
+The `req` passed to handlers and middleware exposes read-only **properties**:
+`req.method`, `req.url`, `req.path`, `req.host`, `req.remote`, `req.client_ip`,
+`req.proto`, `req.headers` (dict), `req.query` (dict), and `req.context`
+(dict — middleware can read/write per-request state here, e.g. `auth_user`).
+
+It also exposes **methods**:
+
+### `req.body()`
+
+Raw request body as a string.
+
+### `req.json()`
+
+Parses the body as JSON and returns the value, or `None` when the body is empty
+or not valid JSON.
+
+### `req.form()`
+
+Parses URL-encoded / multipart form data into a dict (a key with multiple
+values becomes a list).
+
+### `req.files()`
+
+Returns uploaded files (multipart) as a dict keyed by field name. Each entry is
+a dict with `filename`, `size`, `content_type`, and a `read()` method returning
+the file content as a string.
+
+### `req.cookie(name)`
+
+Returns the named cookie's value, or `None`.
+
+### `req.param(name)`
+
+Returns the named path parameter (e.g. `id` from `/users/{id}`), or `None`.
+
+### `req.get_header(name, default?=None)`
+
+Returns the named request header, or `default` when absent.
+
+### `req.bearer_token(header?="Authorization")`
+
+Extracts a Bearer token from the header (stripping the `Bearer` scheme prefix
+and its trailing space on `Authorization`), or `None`.
+
+### `req.basic_auth()`
+
+Returns a `(username, password)` tuple from HTTP Basic credentials, or `None`.
+
+## Response object
+
+A response (from a builder, or constructed by middleware) has settable fields
+`status_code` (int), `headers` (dict), `body` (string), and `file_path`
+(string), plus methods:
+
+### `set_header(name, value)`
+
+Sets a response header.
+
+### `get_header(name, default?=None)`
+
+Returns a response header, or `default` when absent.
+
+### `set_cookie(name, value, max_age?=None, path?="/", domain?="", secure?=False, http_only?=True)`
+
+Appends a `Set-Cookie` header. Each call emits its own header line (cookies are
+never comma-combined).
+
+### `delete_cookie(name, path?="/", domain?="")`
+
+Appends a `Set-Cookie` line that expires the named cookie (`Max-Age=0`).
+
+## Custom middleware
+
+Middleware carries a path pattern; `srv.use(mw)` is shorthand for
+`srv.use_for("/*", mw)`. Patterns support exact paths, `/*` prefix globs,
+mid-path `*`, and `{param}` segments.
+
+A custom middleware is a callable `func(req, next)` that returns a response. It
+calls `next(req)` to invoke the rest of the chain (the `next` argument is itself
+a builtin that takes the request and returns the downstream response), and may
+inspect or mutate the response before returning it:
+
+```python
+def add_header(req, next):
+    resp = next(req)
+    resp.set_header("X-Custom-Server", "Starlark-Web")
+    return resp
+
+srv.use(add_header)
+```
+
+Built-in middleware is composed the same way:
 
 ```python
 load("web", "create_server", "logging_middleware", "cors_middleware",
@@ -120,18 +398,10 @@ srv.use_for("/api/*", rate_limit_middleware(requests=100, window=60))
 srv.use_for("/admin/*", security_headers_middleware(hsts="max-age=31536000"))
 ```
 
-Custom middleware is a `func(req, next)` that returns a response:
+## Authenticators
 
-```python
-def add_header(req, next):
-    resp = next(req)
-    resp.set_header("X-Custom-Server", "Starlark-Web")
-    return resp
-
-srv.use(add_header)
-```
-
-### Authentication
+Each authentication constructor returns an object exposing `auth.middleware()`,
+which produces a middleware to attach with `srv.use_for(...)`:
 
 ```python
 load("web", "basic_auth", "bearer_auth", "api_key_auth")
@@ -150,7 +420,8 @@ srv.use_for("/svc/*", api_key_auth(keys=["k1", "k2"], header="X-API-Key").middle
 ```
 
 In handlers, read auth data through the request helpers, e.g.
-`req.basic_auth()`, `req.bearer_token()`, or `req.get_header("X-API-Key")`.
+`req.basic_auth()`, `req.bearer_token()`, `req.get_header("X-API-Key")`, or the
+`auth_user` entry the authenticator wrote into `req.context`.
 
 ## Hardening
 
@@ -165,25 +436,25 @@ srv = create_server(host="0.0.0.0", port=8080)
 srv.run()   # error: refusing to bind to non-loopback host "0.0.0.0"; set allow_public_bind=true ...
 ```
 
-> Full host-level network capability gating (deny-by-policy) lives in the
-> sandbox runtime layer; this is the module-local guardrail.
+The guardrail defaults to off — historical scripts that bind `localhost` keep
+working unchanged. Full host-level network capability gating (deny-by-policy)
+lives in the sandbox runtime layer; this is the module-local guardrail.
 
 ## Configuration
 
-| Option | Type | Default | Description |
-|--------|------|---------|-------------|
-| `host` | `string` | `"localhost"` | Default host to bind to |
-| `port` | `int` | `8080` | Default port to listen on |
-| `read_timeout` | `int` | `30` | Read timeout in seconds |
-| `write_timeout` | `int` | `30` | Write timeout in seconds |
-| `max_body_size` | `int` | `33554432` | Maximum request body size in bytes (32 MiB) |
-| `debug_mode` | `bool` | `false` | Enable Gin debug logging |
-| `server_header` | `string` | `"Starlark-Web/1.0"` | Custom `Server` header value |
-| `allow_public_bind` | `bool` | `false` | Allow binding to a non-loopback (public) address |
+The module reads defaults from `base`'s config system; every option has an
+environment-variable form.
 
-Settable via `WEB_HOST` / `WEB_PORT` / `WEB_READ_TIMEOUT` / `WEB_WRITE_TIMEOUT` /
-`WEB_MAX_BODY_SIZE` / `WEB_DEBUG_MODE` / `WEB_SERVER_HEADER` /
-`WEB_ALLOW_PUBLIC_BIND`.
+| Option | Type | Default | Environment Variable | Description |
+|--------|------|---------|----------------------|-------------|
+| `host` | `string` | `"localhost"` | `WEB_HOST` | Default host to bind to |
+| `port` | `int` | `8080` | `WEB_PORT` | Default port to listen on |
+| `read_timeout` | `int` | `30` | `WEB_READ_TIMEOUT` | Read timeout in seconds |
+| `write_timeout` | `int` | `30` | `WEB_WRITE_TIMEOUT` | Write timeout in seconds |
+| `max_body_size` | `int` | `33554432` | `WEB_MAX_BODY_SIZE` | Maximum request body size in bytes (32 MiB) |
+| `debug_mode` | `bool` | `false` | `WEB_DEBUG_MODE` | Enable Gin debug logging |
+| `server_header` | `string` | `"Starlark-Web/1.0"` | `WEB_SERVER_HEADER` | Custom `Server` header value |
+| `allow_public_bind` | `bool` | `false` | `WEB_ALLOW_PUBLIC_BIND` | Allow binding to a non-loopback (public) address |
 
 ## License
 
