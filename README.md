@@ -162,8 +162,9 @@ in the `query_param` query string parameter, matched against the allowed
 
 #### `bearer_auth(validate_func, header?="Authorization")`
 
-Bearer-token authenticator. The `Bearer ` prefix is stripped from the
-`Authorization` header (a custom `header` is used as-is or also de-prefixed),
+Bearer-token authenticator. The `Bearer` scheme prefix (and its trailing
+space) is stripped from the `Authorization` header (a custom `header` is used
+as-is or also de-prefixed),
 then `validate_func(token)` is called: return user info on success, or `None`
 to reject.
 
@@ -175,8 +176,8 @@ appears in the `WWW-Authenticate` challenge.
 ### Middleware
 
 Each constructor returns a middleware object you attach with `srv.use(mw)`
-(all paths) or `srv.use_for(pattern, mw)`. See [Middleware](#middleware-1) for
-the path-pattern and custom-middleware model.
+(all paths) or `srv.use_for(pattern, mw)`. See [Custom middleware](#custom-middleware)
+for the path-pattern and custom-middleware model.
 
 #### `cors_middleware(origins?=[], methods?=[], headers?=[], credentials?=False)`
 
@@ -274,7 +275,7 @@ Adds global middleware (matches every path). Shorthand for
 Adds `middleware` for requests whose path matches `path_pattern`. The argument
 may be a middleware object (from a constructor above or an
 [authenticator's `middleware()`](#authenticators)) or a custom callable
-`func(req, next)` — see [Middleware](#middleware-1).
+`func(req, next)` — see [Custom middleware](#custom-middleware).
 
 #### `srv.error_handler(status_codes, handler)`
 
@@ -300,44 +301,44 @@ The `req` passed to handlers and middleware exposes read-only **properties**:
 
 It also exposes **methods**:
 
-#### `req.body()`
+### `req.body()`
 
 Raw request body as a string.
 
-#### `req.json()`
+### `req.json()`
 
 Parses the body as JSON and returns the value, or `None` when the body is empty
 or not valid JSON.
 
-#### `req.form()`
+### `req.form()`
 
 Parses URL-encoded / multipart form data into a dict (a key with multiple
 values becomes a list).
 
-#### `req.files()`
+### `req.files()`
 
 Returns uploaded files (multipart) as a dict keyed by field name. Each entry is
 a dict with `filename`, `size`, `content_type`, and a `read()` method returning
 the file content as a string.
 
-#### `req.cookie(name)`
+### `req.cookie(name)`
 
 Returns the named cookie's value, or `None`.
 
-#### `req.param(name)`
+### `req.param(name)`
 
 Returns the named path parameter (e.g. `id` from `/users/{id}`), or `None`.
 
-#### `req.get_header(name, default?=None)`
+### `req.get_header(name, default?=None)`
 
 Returns the named request header, or `default` when absent.
 
-#### `req.bearer_token(header?="Authorization")`
+### `req.bearer_token(header?="Authorization")`
 
-Extracts a Bearer token from the header (stripping the `Bearer ` prefix on
-`Authorization`), or `None`.
+Extracts a Bearer token from the header (stripping the `Bearer` scheme prefix
+and its trailing space on `Authorization`), or `None`.
 
-#### `req.basic_auth()`
+### `req.basic_auth()`
 
 Returns a `(username, password)` tuple from HTTP Basic credentials, or `None`.
 
@@ -347,20 +348,20 @@ A response (from a builder, or constructed by middleware) has settable fields
 `status_code` (int), `headers` (dict), `body` (string), and `file_path`
 (string), plus methods:
 
-#### `set_header(name, value)`
+### `set_header(name, value)`
 
 Sets a response header.
 
-#### `get_header(name, default?=None)`
+### `get_header(name, default?=None)`
 
 Returns a response header, or `default` when absent.
 
-#### `set_cookie(name, value, max_age?=None, path?="/", domain?="", secure?=False, http_only?=True)`
+### `set_cookie(name, value, max_age?=None, path?="/", domain?="", secure?=False, http_only?=True)`
 
 Appends a `Set-Cookie` header. Each call emits its own header line (cookies are
 never comma-combined).
 
-#### `delete_cookie(name, path?="/", domain?="")`
+### `delete_cookie(name, path?="/", domain?="")`
 
 Appends a `Set-Cookie` line that expires the named cookie (`Max-Age=0`).
 
