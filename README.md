@@ -3,6 +3,8 @@
 [![Go Reference](https://pkg.go.dev/badge/github.com/starpkg/web.svg)](https://pkg.go.dev/github.com/starpkg/web)
 [![license](https://img.shields.io/badge/License-MIT-blue.svg)](https://opensource.org/licenses/MIT)
 [![Go Report Card](https://goreportcard.com/badge/github.com/starpkg/web)](https://goreportcard.com/report/github.com/starpkg/web)
+[![codecov](https://codecov.io/gh/starpkg/web/graph/badge.svg)](https://codecov.io/gh/starpkg/web)
+![binary footprint](https://img.shields.io/badge/binary_footprint-%2B5.1_MB-blue)
 
 Build server-side HTTP applications from Starlark with a Flask-inspired API:
 routing, route groups, path-pattern middleware, request/response helpers,
