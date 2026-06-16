@@ -15,6 +15,7 @@ that registers routes and controls the lifecycle; route handlers receive a
 
 - [Server creation](#server-creation)
 - [Response builders](#response-builders)
+- [Static file serving](#static-file-serving)
 - [Authentication constructors](#authentication-constructors)
 - [Middleware constructors](#middleware-constructors)
 - [Server object](#server-object)
@@ -225,6 +226,54 @@ instead — see [`error_handler`](#error_handlerstatus_codes-handler).
 
 ```python
 error_response(404, message="Not Found")
+```
+
+## Static file serving
+
+### `static_dir(root, index?, spa?, cache_control?)`
+
+Builds a **read-only** static-file root, mounted on a server with
+[`srv.static`](#staticprefix-dir). Serving goes through `http.ServeContent`, so
+Range requests, conditional GET (`If-Modified-Since` / `If-None-Match` → `304`),
+and `Content-Type` by extension all work without the script handling them; an
+`*os.File` is streamed with `sendfile` zero-copy.
+
+**Parameters:**
+
+- `root` (string): The directory to serve. Must not be empty.
+- `index` (string or list of strings, optional): Directory default pages, tried
+  in order (default: `["index.html", "index.htm"]`). An empty list disables
+  index pages (directories then 404).
+- `spa` (bool, optional): When true, an unmatched path that is not a file serves
+  the first index page (single-page-app fallback) instead of `404` (default:
+  `false` — a miss is a `404`, which is safer and more predictable).
+- `cache_control` (string, optional): A `Cache-Control` header value to set on
+  served files (default: none).
+
+**Returns:** A `web.StaticDir` handle (pass it to `srv.static`).
+
+**Safety (always on, no opt-out):**
+
+- **No path traversal.** The request path is cleaned and anchored under `root`;
+  `..` can never escape, and the resolved path is re-checked against the
+  absolute root.
+- **No dotfiles / junk.** Any path segment starting with `.` (e.g. `.git`,
+  `.env`) or named `@eaDir` is `404`, never served — **except** the standard
+  `.well-known/` location (RFC 8615: ACME challenges, `security.txt`, …), which
+  is served (a dotfile *inside* it is still blocked).
+- **No directory listing.** A directory with no index page is `404`; the
+  filesystem is never enumerated.
+- **Read-only.** No write path is ever exposed.
+
+**Example:**
+
+```python
+load("web", "create_server", "static_dir", "text_response")
+
+srv = create_server(port=8080)             # localhost by default
+srv.static("/", static_dir("./public"))    # serve a directory as a site
+srv.get("/health", lambda req: text_response("ok"))   # explicit routes win
+srv.run()
 ```
 
 ## Authentication constructors
@@ -583,6 +632,22 @@ Returns a route group sharing the `prefix`.
 ```python
 api = srv.group("/api/v1")
 api.get("/users", list_users)
+```
+
+#### `static(prefix, dir)`
+
+Mounts a [`static_dir`](#static_dirroot-index-spa-cache_control) at a URL
+`prefix`. Static files are served as a **fallback for unmatched routes**, so any
+explicit route registered on the server takes precedence. A request under
+`prefix` that does not resolve to a servable file falls through to the normal
+`404` (it does not leak the filesystem).
+
+- `prefix` (string): URL prefix to mount under (`/` serves the whole site).
+- `dir` (`web.StaticDir`): the handle returned by `static_dir(...)`.
+- **Returns:** `None`.
+
+```python
+srv.static("/assets", static_dir("./public/assets", cache_control="max-age=3600"))
 ```
 
 ### Middleware and error handlers

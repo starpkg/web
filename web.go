@@ -112,6 +112,7 @@ func (m *Module) LoadModule() starlet.ModuleLoader {
 		"error_response": starlark.NewBuiltin(ModuleName+".error_response", m.errorResponse),
 		"send_file":      starlark.NewBuiltin(ModuleName+".send_file", m.sendFile),
 		"send_data":      starlark.NewBuiltin(ModuleName+".send_data", m.sendData),
+		"static_dir":     starlark.NewBuiltin(ModuleName+".static_dir", m.staticDir),
 		// Authentication functions
 		"api_key_auth": starlark.NewBuiltin(ModuleName+".api_key_auth", m.apiKeyAuth),
 		"bearer_auth":  starlark.NewBuiltin(ModuleName+".bearer_auth", m.bearerAuth),

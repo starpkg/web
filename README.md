@@ -90,6 +90,7 @@ Module builtins (`load("web", …)`):
 - `file_response(filepath, content_type?, filename?)` — serve a file (optionally as a download).
 - `send_file(filepath, content_type?)` — serve a file.
 - `send_data(data, filename, content_type?)` — send in-memory data as a download.
+- `static_dir(root, index?, spa?, cache_control?)` — read-only static-file root for `srv.static` (safe by default: no traversal/dotfiles/listing).
 - `redirect(location, status?)` — redirect response.
 - `error_response(status, message?)` — error response.
 - `api_key_auth(keys?, header?, query_param?)` — API-key authenticator.
@@ -106,8 +107,8 @@ Module builtins (`load("web", …)`):
 - `request_size_middleware(max_content_length?, max_url_length?, max_headers?)` — request-size limiting middleware.
 
 Server object: `get` / `post` / `put` / `delete` / `patch` / `options` / `head`,
-`route`, `group`, `use`, `use_for`, `error_handler`, `start`, `stop`, `run`,
-`is_running`.
+`route`, `group`, `static` (mount a `static_dir`), `use`, `use_for`,
+`error_handler`, `start`, `stop`, `run`, `is_running`.
 
 Request object — properties `method`, `url`, `path`, `host`, `remote`,
 `client_ip`, `proto`, `headers`, `query`, `context`; methods `body`, `json`,

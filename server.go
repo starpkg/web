@@ -51,8 +51,9 @@ type Server struct {
 	allowPublicBind    bool          // When false, refuse to bind to a non-loopback address
 	middleware         []*Middleware // All middleware with path patterns
 	errorHandlers      *ErrorHandlerRegistry
-	ginMiddlewareAdded bool         // Flag to prevent multiple Gin middleware additions
-	mu                 sync.RWMutex // Protects running, httpServer fields
+	ginMiddlewareAdded bool           // Flag to prevent multiple Gin middleware additions
+	staticMounts       []*staticMount // Read-only static-file roots, served as a NoRoute fallback
+	mu                 sync.RWMutex   // Protects running, httpServer, staticMounts fields
 }
 
 // newServer creates a new Server instance with module configuration
@@ -119,6 +120,12 @@ func newServer(module *Module, host string, port int) *Server {
 	})
 
 	engine.NoRoute(func(c *gin.Context) {
+		// Static-file fallback: an unmatched GET/HEAD under a mounted prefix is
+		// served from disk. A miss falls through to the 404 path below, so the
+		// filesystem is never enumerated and explicit routes always win.
+		if server.tryServeStatic(c) {
+			return
+		}
 		// Use custom 404 error handler if registered
 		if customHandler := server.errorHandlers.GetHandler(404); customHandler != nil {
 			req := createRequestFromGin(c)
@@ -650,6 +657,7 @@ func NewServerWrapper(server *Server) *ServerWrapper {
 		"run":           func() starlark.Value { return starlark.NewBuiltin("run", sw.run) },
 		"is_running":    func() starlark.Value { return starlark.NewBuiltin("is_running", sw.isRunning) },
 		"group":         func() starlark.Value { return starlark.NewBuiltin("group", sw.group) },
+		"static":        func() starlark.Value { return starlark.NewBuiltin("static", sw.static) },
 		"use":           func() starlark.Value { return starlark.NewBuiltin("use", sw.use) },
 		"use_for":       func() starlark.Value { return starlark.NewBuiltin("use_for", sw.useFor) },
 		"error_handler": func() starlark.Value { return starlark.NewBuiltin("error_handler", sw.errorHandler) },
@@ -725,6 +733,24 @@ func (sw *ServerWrapper) AttrNames() []string {
 }
 
 // Starlark builtin methods
+
+// static mounts a read-only static-file directory (from static_dir()) at a URL
+// prefix. Files are served as a fallback for unmatched routes, so explicit
+// routes registered on the server take precedence.
+func (sw *ServerWrapper) static(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
+	var (
+		prefix string
+		dir    starlark.Value
+	)
+	if err := starlark.UnpackArgs(b.Name(), args, kwargs, "prefix", &prefix, "dir", &dir); err != nil {
+		return nil, err
+	}
+	sd, ok := dir.(*StaticDir)
+	if !ok {
+		return nil, fmt.Errorf("static: dir must be a web.StaticDir (from static_dir()), got %s", dir.Type())
+	}
+	return starlark.None, sw.server.RegisterStatic(prefix, sd)
+}
 
 func (sw *ServerWrapper) route(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var methods starlark.Value

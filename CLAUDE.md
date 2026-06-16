@@ -92,6 +92,15 @@ back. Every script-visible thing is a Go struct exposed through a thin
 - **`path_matcher.go`** — `PathMatcher` + package-level `MatchesPattern`/
   `MatchesAny`/`ExtractParams`/`NormalizePath`/`IsValidPattern`. Glob (`/*`,
   mid-path `*`), `{param}`, and exact matching for middleware/cache patterns.
+- **`static.go`** — static-file serving. `static_dir(...)` builds a read-only
+  `StaticDir`; `srv.static(prefix, dir)` mounts it. Served as a **NoRoute
+  fallback** (explicit routes win) via `http.ServeContent` (Range/conditional
+  GET + weak ETag/sendfile). Path safety = a rooted `os.DirFS` opened through
+  `fs.ValidPath` (the barrier that confines traversal, also satisfies CodeQL's
+  path-injection query) + dotfile/`@eaDir` rejection (`.well-known` carve-out) +
+  an `EvalSymlinks` real-path check (`openWithin`) that blocks symlink escape.
+  Mount registry is copy-on-write so the serve path reads it lock-free. Tests in
+  `static_test.go` (source-shaped).
 - **`errors.go`** — `ErrorResponse`, `ErrorHandlerRegistry` (status code →
   Starlark handler), invoked from `applyResponse`/`NoRoute`/`NoMethod`.
 - **`utils.go`** — MIME/Header constants, Starlark⇄Go converters
