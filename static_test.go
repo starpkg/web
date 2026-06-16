@@ -10,6 +10,7 @@ package web
 
 import (
 	"fmt"
+	"io/fs"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -61,7 +62,7 @@ func staticDirFor(root string, spa bool) *StaticDir {
 	if rr, err := filepath.EvalSymlinks(abs); err == nil {
 		real = rr
 	}
-	return &StaticDir{root: root, rootAbs: abs, realRoot: real, index: defaultIndexFiles, spa: spa}
+	return &StaticDir{root: root, rootAbs: abs, realRoot: real, fsys: os.DirFS(abs), index: defaultIndexFiles, spa: spa}
 }
 
 func do(s *Server, method, target string, hdr map[string]string) *httptest.ResponseRecorder {
@@ -111,15 +112,17 @@ func TestStaticPathSafety(t *testing.T) {
 	root := setupSite(t)
 	sd := staticDirFor(root, false)
 
-	// resolve() must never escape the root, and must reject dotfiles.
-	t.Run("resolveNeverEscapes", func(t *testing.T) {
+	// resolve() must only ever yield a clean, in-root RELATIVE name — fs.ValidPath
+	// is what confines os.DirFS to the root, so every accepted name must satisfy
+	// it (rejecting "..", absolute, and empty-segment names).
+	t.Run("resolveStaysInRoot", func(t *testing.T) {
 		for _, rel := range []string{
 			"/../../../etc/passwd", "/..", "/../", "/a/../../b",
 			"/./about.html", "/sub/../about.html", "//etc//passwd",
-			"/foo/%2e%2e/bar", // already-decoded by net/http normally; literal here stays a normal segment
+			"/foo/%2e%2e/bar", // %2e is literal here (net/http would decode it upstream)
 		} {
-			if p, ok := sd.resolve(rel); ok && !withinRoot(sd.rootAbs, p) {
-				t.Errorf("resolve(%q) = %q escaped root %q", rel, p, sd.rootAbs)
+			if name, ok := sd.resolve(rel); ok && !fs.ValidPath(name) {
+				t.Errorf("resolve(%q) = %q is not a valid in-root path", rel, name)
 			}
 		}
 	})

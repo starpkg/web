@@ -15,6 +15,8 @@ package web
 
 import (
 	"fmt"
+	"io"
+	"io/fs"
 	"net/http"
 	"os"
 	"path"
@@ -34,8 +36,9 @@ var defaultIndexFiles = []string{"index.html", "index.htm"}
 // handle, not a response — it carries no script-callable methods.
 type StaticDir struct {
 	root         string   // root as given (for display)
-	rootAbs      string   // absolute, cleaned root used as the lexical traversal anchor
+	rootAbs      string   // absolute, cleaned root (anchor for the symlink real-path check)
 	realRoot     string   // symlink-resolved root; a served file's real path must stay under it
+	fsys         fs.FS    // os.DirFS(rootAbs): a rooted FS that confines traversal by construction
 	index        []string // directory default pages, in order
 	spa          bool     // serve the first index page for unmatched paths
 	cacheControl string   // optional Cache-Control header for served files
@@ -83,7 +86,15 @@ func (m *Module) staticDir(thread *starlark.Thread, b *starlark.Builtin, args st
 	if rr, err := filepath.EvalSymlinks(rootAbs); err == nil {
 		realRoot = rr
 	}
-	return &StaticDir{root: root, rootAbs: rootAbs, realRoot: realRoot, index: idx, spa: spa, cacheControl: cacheControl}, nil
+	return &StaticDir{
+		root:         root,
+		rootAbs:      rootAbs,
+		realRoot:     realRoot,
+		fsys:         os.DirFS(rootAbs),
+		index:        idx,
+		spa:          spa,
+		cacheControl: cacheControl,
+	}, nil
 }
 
 // parseIndexList accepts None (default), a single string, or a list of strings.
@@ -203,35 +214,36 @@ func (s *Server) tryServeStatic(c *gin.Context) bool {
 	return false
 }
 
-// serve resolves rel under the root and serves the file (or a directory's index
-// page). Returns false — without writing — for an unsafe path, a missing file,
-// or a directory without an index page (no listing is ever produced).
+// serve resolves rel to a validated in-root name and serves the file (or a
+// directory's index page). Returns false — without writing — for an unsafe
+// path, a missing file, or a directory without an index page (no listing is
+// ever produced).
 func (sd *StaticDir) serve(c *gin.Context, rel string) bool {
-	fsPath, ok := sd.resolve(rel)
+	name, ok := sd.resolve(rel)
 	if !ok {
 		return false
 	}
-	f, fi, ok := sd.openWithin(fsPath)
+	f, fi, ok := sd.openWithin(name)
 	if !ok {
 		return false
 	}
 	if fi.IsDir() {
 		f.Close()
 		for _, idx := range sd.index {
-			if sd.serveExactFile(c, filepath.Join(fsPath, idx)) {
+			if sd.serveExactFile(c, path.Join(name, idx)) {
 				return true
 			}
 		}
 		return false // directory without an index page: never list, fall through to 404
 	}
 	defer f.Close()
-	sd.writeFile(c, f, fi.Name(), fi)
+	sd.writeContent(c, f, fi)
 	return true
 }
 
-// serveExactFile serves fsPath only if it is an existing regular file within root.
-func (sd *StaticDir) serveExactFile(c *gin.Context, fsPath string) bool {
-	f, fi, ok := sd.openWithin(fsPath)
+// serveExactFile serves name only if it is an existing regular file.
+func (sd *StaticDir) serveExactFile(c *gin.Context, name string) bool {
+	f, fi, ok := sd.openWithin(name)
 	if !ok {
 		return false
 	}
@@ -239,23 +251,36 @@ func (sd *StaticDir) serveExactFile(c *gin.Context, fsPath string) bool {
 	if fi.IsDir() {
 		return false
 	}
-	sd.writeFile(c, f, fi.Name(), fi)
+	sd.writeContent(c, f, fi)
 	return true
 }
 
-// openWithin opens fsPath only if its real (symlink-resolved) path stays under
-// the real root — so a symlink inside the served tree cannot escape it. Returns
-// ok=false (without opening) for a missing path, a broken/looping symlink, or
-// an escape. The caller closes the returned file.
-func (sd *StaticDir) openWithin(fsPath string) (*os.File, os.FileInfo, bool) {
-	real, err := filepath.EvalSymlinks(fsPath)
-	if err != nil {
+// serveSPAFallback serves the first index page for an unmatched path (only when
+// spa is enabled), so a client-routed single-page app still loads.
+func (sd *StaticDir) serveSPAFallback(c *gin.Context) bool {
+	if len(sd.index) == 0 {
+		return false
+	}
+	return sd.serveExactFile(c, sd.index[0])
+}
+
+// openWithin opens a relative name from the rooted FS. fs.ValidPath is the
+// barrier that confines name to the root (it rejects "..", absolute, and
+// empty-segment names), so os.DirFS cannot be walked outside its base. As a
+// second layer it also rejects the target when a symlink resolves its real path
+// outside the root (os.DirFS confines lexical traversal but still follows
+// symlinks). The caller closes the returned file.
+func (sd *StaticDir) openWithin(name string) (fs.File, fs.FileInfo, bool) {
+	if !fs.ValidPath(name) {
 		return nil, nil, false
 	}
-	if !withinRoot(sd.realRoot, real) {
-		return nil, nil, false
+	if name != "." {
+		real, err := filepath.EvalSymlinks(filepath.Join(sd.rootAbs, filepath.FromSlash(name)))
+		if err != nil || !withinRoot(sd.realRoot, real) {
+			return nil, nil, false
+		}
 	}
-	f, err := os.Open(fsPath)
+	f, err := sd.fsys.Open(name)
 	if err != nil {
 		return nil, nil, false
 	}
@@ -267,18 +292,14 @@ func (sd *StaticDir) openWithin(fsPath string) (*os.File, os.FileInfo, bool) {
 	return f, fi, true
 }
 
-// serveSPAFallback serves the first index page for an unmatched path (used only
-// when spa is enabled), so a client-routed single-page app still loads.
-func (sd *StaticDir) serveSPAFallback(c *gin.Context) bool {
-	if len(sd.index) == 0 {
-		return false
+// writeContent sets the optional cache header + a weak validator and streams the
+// file via http.ServeContent (Range, conditional GET, content-type by
+// extension, sendfile zero-copy for the underlying *os.File).
+func (sd *StaticDir) writeContent(c *gin.Context, f fs.File, fi fs.FileInfo) {
+	rs, ok := f.(io.ReadSeeker)
+	if !ok { // os.DirFS files are seekable; guard defensively
+		return
 	}
-	return sd.serveExactFile(c, filepath.Join(sd.rootAbs, sd.index[0]))
-}
-
-// writeFile sets the optional cache header and streams the file via
-// http.ServeContent (Range, conditional GET, content-type, sendfile).
-func (sd *StaticDir) writeFile(c *gin.Context, f *os.File, name string, fi os.FileInfo) {
 	h := c.Writer.Header()
 	if sd.cacheControl != "" {
 		h.Set("Cache-Control", sd.cacheControl)
@@ -289,42 +310,39 @@ func (sd *StaticDir) writeFile(c *gin.Context, f *os.File, name string, fi os.Fi
 	if h.Get("ETag") == "" {
 		h.Set("ETag", fmt.Sprintf(`W/"%x-%x"`, fi.Size(), fi.ModTime().UnixNano()))
 	}
-	http.ServeContent(c.Writer, c.Request, name, fi.ModTime(), f)
+	http.ServeContent(c.Writer, c.Request, fi.Name(), fi.ModTime(), rs)
 }
 
-// resolve maps a URL-relative path to an absolute on-disk path anchored under
-// the root, or returns ok=false for anything unsafe: a traversal escape, a
-// dotfile/dotdir segment, or a known junk segment. The URL path is cleaned with
-// path.Clean("/"+rel) (which collapses "." and resolves ".." against the root),
-// then re-checked against the absolute root as defense in depth.
+// resolve maps a URL-relative path to a clean, in-root relative name (slash-
+// separated, no leading slash, "." for the root) for the rooted FS, or ok=false
+// for a dotfile/dotdir segment or a junk segment. Traversal is collapsed by
+// path.Clean here and enforced by fs.ValidPath at the open in openWithin.
 func (sd *StaticDir) resolve(rel string) (string, bool) {
-	if rel == "" {
-		rel = "/"
-	}
 	clean := path.Clean("/" + strings.TrimPrefix(rel, "/"))
-	for _, seg := range strings.Split(clean, "/") {
-		if seg == "" {
+	name := strings.TrimPrefix(clean, "/")
+	if name == "" {
+		name = "."
+	}
+	for _, seg := range strings.Split(name, "/") {
+		if seg == "" || seg == "." {
 			continue
 		}
 		if strings.HasPrefix(seg, ".") && seg != ".well-known" { // dotfiles / dotdirs
-			// .well-known is the one allowed dot-segment: it is the standard
-			// public location (RFC 8615) for ACME HTTP-01 challenges,
-			// security.txt, etc. A dotfile *inside* it (e.g. .well-known/.x) is
-			// still rejected by this same loop on the next segment.
+			// .well-known is the one allowed dot-segment: the standard public
+			// location (RFC 8615) for ACME HTTP-01 challenges, security.txt, etc.
+			// A dotfile *inside* it (e.g. .well-known/.x) is still rejected here.
 			return "", false
 		}
 		if seg == "@eaDir" { // Synology metadata junk
 			return "", false
 		}
 	}
-	fsPath := filepath.Join(sd.rootAbs, filepath.FromSlash(clean))
-	if !withinRoot(sd.rootAbs, fsPath) {
-		return "", false
-	}
-	return fsPath, true
+	return name, true
 }
 
-// withinRoot reports whether p resolves to rootAbs or a path beneath it.
+// withinRoot reports whether p resolves to rootAbs or a path beneath it. Used
+// for the symlink real-path check (os.DirFS + fs.ValidPath handle lexical
+// traversal).
 func withinRoot(rootAbs, p string) bool {
 	pAbs, err := filepath.Abs(p)
 	if err != nil {
