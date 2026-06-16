@@ -156,9 +156,12 @@ func TestMiddlewareWrapperAttrs(t *testing.T) {
 func TestServerWrapperAttrNames(t *testing.T) {
 	sw := NewServerWrapper(newServer(NewModule(), "localhost", 0))
 	names := sw.AttrNames()
-	// 7 HTTP methods + 9 other attrs (route/start/stop/run/is_running/group/use/use_for/error_handler).
-	if len(names) != 16 {
-		t.Errorf("ServerWrapper AttrNames count = %d, want 16: %v", len(names), names)
+	// 7 HTTP methods + 10 other attrs (route/start/stop/run/is_running/group/static/use/use_for/error_handler).
+	if len(names) != 17 {
+		t.Errorf("ServerWrapper AttrNames count = %d, want 17: %v", len(names), names)
+	}
+	if _, err := sw.Attr("static"); err != nil {
+		t.Errorf("Attr(static): %v", err)
 	}
 	if _, err := sw.Attr("get"); err != nil {
 		t.Errorf("Attr(get): %v", err)
