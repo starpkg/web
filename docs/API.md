@@ -918,6 +918,10 @@ set only via Go configuration or their `WEB_*` environment variable, never a
 script `set_<key>` builtin. (No `web` option is secret; a secret option would
 expose only its `set_<key>` accessor — the inverse of host-only.)
 
+Because they are host-only, there is deliberately **no** `set_max_body_size` and
+**no** `set_allow_unsafe_file_paths` builtin — a script cannot call these; set
+them from Go configuration or the corresponding `WEB_*` environment variable.
+
 | Option | Getter | Setter | Type | Env var | Default | Description |
 |--------|--------|--------|------|---------|---------|-------------|
 | `host` | `get_host` | `set_host` | string | `WEB_HOST` | `localhost` | Default host to bind to |

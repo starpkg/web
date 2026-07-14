@@ -511,34 +511,8 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 		c.File(p) // opt-out: unrestricted serving (historical behavior)
 		return true
 	}
-	if strings.TrimSpace(p) == "" {
-		return false
-	}
-	abs, err := filepath.Abs(p)
-	if err != nil {
-		return false
-	}
-	// Resolve symlinks to a physical path and confirm it is under the working
-	// directory BEFORE opening anything, so an outside target is never opened —
-	// this also means a FIFO/device outside the root can't block os.Open.
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return false
-	}
-	root, err := os.Getwd()
-	if err != nil {
-		return false
-	}
-	realRoot, err := filepath.EvalSymlinks(root)
-	if err != nil {
-		realRoot = root
-	}
-	if !withinRoot(realRoot, real) {
-		return false
-	}
-	// real is symlink-free, so Lstat == Stat: reject a directory (ServeFile would
-	// list it) or a FIFO/device (which could block on open) before opening.
-	if fi, err := os.Lstat(real); err != nil || !fi.Mode().IsRegular() {
+	real, ok := s.resolveConfinedFile(p)
+	if !ok {
 		return false
 	}
 	f, err := os.Open(real)
@@ -552,8 +526,48 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 	}
 	// Infer the content type from the REQUESTED name, not the symlink target's,
 	// so a ".json" alias of a ".html" file is not served as active HTML.
-	http.ServeContent(c.Writer, c.Request, filepath.Base(abs), fi.ModTime(), f)
+	http.ServeContent(c.Writer, c.Request, filepath.Base(p), fi.ModTime(), f)
 	return true
+}
+
+// resolveConfinedFile resolves p to a symlink-free physical path, confirms it is
+// a regular file under the working directory, and returns it. Resolving and
+// checking BEFORE any open means an outside target is never opened — so a
+// FIFO/device outside the root cannot block os.Open — and a directory (which
+// http.ServeFile would list) is rejected.
+func (s *Server) resolveConfinedFile(p string) (string, bool) {
+	if strings.TrimSpace(p) == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	realRoot, ok := workingDirReal()
+	if !ok || !withinRoot(realRoot, real) {
+		return "", false
+	}
+	// real is symlink-free, so Lstat == Stat: reject a directory or FIFO/device.
+	if fi, err := os.Lstat(real); err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	return real, true
+}
+
+// workingDirReal returns the symlink-resolved process working directory.
+func workingDirReal() (string, bool) {
+	root, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	if rr, err := filepath.EvalSymlinks(root); err == nil {
+		return rr, true
+	}
+	return root, true
 }
 
 // Server lifecycle methods

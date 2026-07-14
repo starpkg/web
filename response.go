@@ -144,6 +144,31 @@ func (rw *ResponseWrapper) SetField(name string, value starlark.Value) error {
 	}
 }
 
+// cookieMaxAge resolves a Starlark max_age value to an http.Cookie MaxAge: None
+// (or a non-int) yields 0, which omits the attribute; a non-positive value
+// expires the cookie now (a negative MaxAge, emitted as "Max-Age=0"); and the
+// magnitude is clamped so the int conversion cannot overflow a 32-bit int.
+func cookieMaxAge(maxAge starlark.Value) int {
+	maxAgeInt, ok := maxAge.(starlark.Int)
+	if !ok {
+		return 0
+	}
+	if age, ok := maxAgeInt.Int64(); ok {
+		switch {
+		case age <= 0:
+			return -1
+		case age > math.MaxInt32:
+			return math.MaxInt32
+		default:
+			return int(age)
+		}
+	}
+	if maxAgeInt.Sign() < 0 {
+		return -1
+	}
+	return math.MaxInt32
+}
+
 // setCookieMethod handles the set_cookie() method call
 func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.Builtin, args starlark.Tuple, kwargs []starlark.Tuple) (starlark.Value, error) {
 	var (
@@ -170,37 +195,13 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 
 	// Build the header through net/http, which sanitizes the name/value/path/
 	// domain. Hand-formatting with Sprintf let a value like "abc; Domain=evil.com"
-	// inject extra cookie attributes; http.Cookie.String() neutralizes that.
-	ck := &http.Cookie{
-		Name:     name,
-		Value:    value,
-		Path:     string(path),
-		Domain:   string(domain),
-		Secure:   bool(secure),
-		HttpOnly: bool(httpOnly),
-	}
-	if maxAge != starlark.None {
-		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
-			// http.Cookie treats MaxAge 0 as "omit the attribute", so an explicit
-			// non-positive max_age (expire now) maps to a negative value, which
-			// emits "Max-Age=0". Clamp so int(age) cannot overflow a 32-bit int.
-			if age, ok := maxAgeInt.Int64(); ok {
-				switch {
-				case age <= 0:
-					ck.MaxAge = -1
-				case age > math.MaxInt32:
-					ck.MaxAge = math.MaxInt32
-				default:
-					ck.MaxAge = int(age)
-				}
-			} else if maxAgeInt.Sign() < 0 {
-				// Too large to fit int64: a huge negative value still means expire.
-				ck.MaxAge = -1
-			} else {
-				ck.MaxAge = math.MaxInt32
-			}
-		}
-	}
+	// inject extra cookie attributes; http.Cookie.String() neutralizes that. The
+	// http_only / secure flags come from the caller (http_only defaults true).
+	ck := &http.Cookie{Name: name, Path: string(path), Domain: string(domain)}
+	ck.Value = value
+	ck.HttpOnly = bool(httpOnly)
+	ck.Secure = bool(secure)
+	ck.MaxAge = cookieMaxAge(maxAge)
 	cookie := ck.String()
 	if cookie == "" {
 		return nil, fmt.Errorf("set_cookie: invalid cookie name %q", name)

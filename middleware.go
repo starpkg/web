@@ -160,21 +160,23 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 // credentials would grant every site credentialed access, so with credentials
 // only an explicit exact origin is allowed. Returns "" when the origin is denied.
 func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) string {
-	if reqOrigin != "" && reqOrigin != "*" {
-		for _, o := range allowed {
-			if o != "*" && o == reqOrigin {
-				return reqOrigin
-			}
-		}
+	if reqOrigin != "" && reqOrigin != "*" && stringInList(allowed, reqOrigin) {
+		return reqOrigin
 	}
-	if !credentials {
-		for _, o := range allowed {
-			if o == "*" {
-				return "*"
-			}
-		}
+	if !credentials && stringInList(allowed, "*") {
+		return "*"
 	}
 	return ""
+}
+
+// stringInList reports whether want appears in list.
+func stringInList(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
 }
 
 // applyCORSOrigin writes the CORS decision. It always adds Vary: Origin (the
@@ -214,34 +216,46 @@ func deleteHeaderFold(h map[string]string, name string) {
 // emission) and leaving a wildcard (Vary: *) untouched.
 func addVaryToken(h map[string]string, token string) {
 	key := canonicalHeader(HeaderVary)
-	existing := ""
-	for k, v := range h {
-		if strings.EqualFold(k, HeaderVary) {
-			if existing == "" {
-				existing = v
-			} else {
-				existing += ", " + v
-			}
-			if k != key {
-				delete(h, k)
-			}
-		}
-	}
+	existing := coalesceVary(h, key)
 	switch {
 	case existing == "":
 		h[key] = token
-		return
-	case strings.TrimSpace(existing) == "*":
+	case strings.TrimSpace(existing) == "*" || varyHasToken(existing, token):
 		h[key] = existing
-		return
+	default:
+		h[key] = existing + ", " + token
 	}
-	for _, t := range strings.Split(existing, ",") {
-		if strings.EqualFold(strings.TrimSpace(t), token) {
-			h[key] = existing
-			return
+}
+
+// coalesceVary merges any case-variant Vary keys in h into the canonical key and
+// returns their combined value.
+func coalesceVary(h map[string]string, key string) string {
+	existing := ""
+	for k, v := range h {
+		if !strings.EqualFold(k, HeaderVary) {
+			continue
+		}
+		if existing == "" {
+			existing = v
+		} else {
+			existing += ", " + v
+		}
+		if k != key {
+			delete(h, k)
 		}
 	}
-	h[key] = existing + ", " + token
+	return existing
+}
+
+// varyHasToken reports whether the comma-separated Vary value already contains
+// token (case-insensitive).
+func varyHasToken(vary, token string) bool {
+	for _, t := range strings.Split(vary, ",") {
+		if strings.EqualFold(strings.TrimSpace(t), token) {
+			return true
+		}
+	}
+	return false
 }
 
 // loggingMiddleware creates a logging middleware
