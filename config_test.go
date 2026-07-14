@@ -232,3 +232,27 @@ func TestHostOnlyConfigOptions(t *testing.T) {
 		}
 	}
 }
+
+// TestHostOnlyOptionsResistEnvMutation verifies the host-only DoS/safety levers
+// cannot be re-widened at runtime by mutating the process environment. base
+// (>= v0.1.3) snapshots a host-only option's env var when the module is
+// constructed, so a script that can call a runtime.setenv-style builtin (an
+// os.Setenv here) cannot disable the body cap or re-enable unsafe file paths.
+func TestHostOnlyOptionsResistEnvMutation(t *testing.T) {
+	t.Setenv("WEB_MAX_BODY_SIZE", "100")
+	t.Setenv("WEB_ALLOW_UNSAFE_FILE_PATHS", "false")
+	m := NewModule() // snapshots the host-only env values here
+
+	// Simulate a script mutating the environment after construction.
+	os.Setenv("WEB_MAX_BODY_SIZE", "0")              // try to disable the body cap
+	os.Setenv("WEB_ALLOW_UNSAFE_FILE_PATHS", "true") // try to enable unsafe paths
+	defer os.Unsetenv("WEB_MAX_BODY_SIZE")
+	defer os.Unsetenv("WEB_ALLOW_UNSAFE_FILE_PATHS")
+
+	if got, err := base.GetConfigValue[int64](m.cfgMod, configKeyMaxBodySize); err != nil || got != 100 {
+		t.Errorf("max_body_size must keep its construction-time value 100, got %d (err %v)", got, err)
+	}
+	if m.ext.GetBool(configKeyAllowUnsafeFilePaths) {
+		t.Error("allow_unsafe_file_paths must stay false — runtime env must not enable unsafe file serving")
+	}
+}
