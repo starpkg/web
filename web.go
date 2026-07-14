@@ -6,6 +6,7 @@ package web
 
 import (
 	"fmt"
+	"mime"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -372,7 +373,10 @@ func (m *Module) fileResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	}
 
 	if filename != "" {
-		response.Headers[canonicalHeader(HeaderContentDisposition)] = fmt.Sprintf("attachment; filename=%s", string(filename))
+		// Format through mime so a filename cannot inject extra header tokens.
+		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": string(filename)}); cd != "" {
+			response.Headers[canonicalHeader(HeaderContentDisposition)] = cd
+		}
 	}
 
 	return NewResponseWrapper(response), nil
@@ -477,10 +481,13 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	response := &Response{
 		StatusCode: 200,
 		Headers: map[string]string{
-			canonicalHeader(HeaderContentType):        string(contentType),
-			canonicalHeader(HeaderContentDisposition): fmt.Sprintf("attachment; filename=%s", string(filename)),
+			canonicalHeader(HeaderContentType): string(contentType),
 		},
 		Body: string(data),
+	}
+	// Format through mime so a filename cannot inject extra header tokens.
+	if cd := mime.FormatMediaType("attachment", map[string]string{"filename": string(filename)}); cd != "" {
+		response.Headers[canonicalHeader(HeaderContentDisposition)] = cd
 	}
 
 	return NewResponseWrapper(response), nil

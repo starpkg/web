@@ -87,6 +87,10 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Create gin engine
 	engine := gin.New()
+	// Trust no proxy by default so c.ClientIP() reflects the real TCP peer: a
+	// client-supplied X-Forwarded-For cannot then spoof the client IP that rate
+	// limiting and audit rely on. gin.New() otherwise trusts every proxy.
+	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery())
 	if debugMode {
 		engine.Use(gin.Logger())

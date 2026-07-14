@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/1set/starlet/dataconv"
+	"github.com/starpkg/base/util"
 	"go.starlark.net/starlark"
 )
 
@@ -99,13 +100,19 @@ func (a *Authenticator) authenticateAPIKey(req *Request) *AuthResult {
 		}
 	}
 
-	// Check if key is valid
+	// Check if key is valid. Compare in constant time and against every key
+	// without an early return, so neither the match itself nor which key matched
+	// leaks through a timing side channel.
+	matched := false
 	for _, validKey := range keys {
-		if apiKey == validKey {
-			return &AuthResult{
-				Success:  true,
-				UserInfo: map[string]interface{}{"api_key": apiKey},
-			}
+		if util.SecretEqualString(apiKey, validKey) {
+			matched = true
+		}
+	}
+	if matched {
+		return &AuthResult{
+			Success:  true,
+			UserInfo: map[string]interface{}{"api_key": apiKey},
 		}
 	}
 
@@ -241,8 +248,8 @@ func (a *Authenticator) authenticateBasic(req *Request) *AuthResult {
 
 	username, password := parts[0], parts[1]
 
-	// Check credentials
-	if validPassword, exists := users[username]; exists && validPassword == password {
+	// Check credentials with a constant-time password comparison.
+	if validPassword, exists := users[username]; exists && util.SecretEqualString(validPassword, password) {
 		return &AuthResult{
 			Success:  true,
 			UserInfo: map[string]interface{}{"username": username},

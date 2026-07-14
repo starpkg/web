@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,33 +129,77 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 	}
 
 	return func(req *Request, next NextFunc) *Response {
+		reqOrigin := req.Headers["Origin"]
+		allowOrigin, vary := corsAllowOrigin(origins, reqOrigin, credentials)
+
 		// Handle preflight requests
 		if req.Method == http.MethodOptions {
-			return &Response{
-				StatusCode: 204,
-				Headers: map[string]string{
-					canonicalHeader(HeaderAccessControlAllowOrigin):      strings.Join(origins, ", "),
-					canonicalHeader(HeaderAccessControlAllowMethods):     strings.Join(methods, ", "),
-					canonicalHeader(HeaderAccessControlAllowHeaders):     strings.Join(headers, ", "),
-					canonicalHeader(HeaderAccessControlAllowCredentials): fmt.Sprintf("%t", credentials),
-				},
-				Body: "",
+			h := map[string]string{
+				canonicalHeader(HeaderAccessControlAllowMethods): strings.Join(methods, ", "),
+				canonicalHeader(HeaderAccessControlAllowHeaders): strings.Join(headers, ", "),
 			}
+			applyCORSOrigin(h, allowOrigin, vary, credentials)
+			return &Response{StatusCode: 204, Headers: h, Body: ""}
 		}
 
 		// Process normal requests
 		response := next(req)
-
-		// Add CORS headers to response
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)] = strings.Join(origins, ", ")
-		if credentials {
-			response.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
-		}
-
+		applyCORSOrigin(response.Headers, allowOrigin, vary, credentials)
 		return response
+	}
+}
+
+// corsAllowOrigin decides the single Access-Control-Allow-Origin value for a
+// request. A configured exact origin is echoed back — never a comma-joined list,
+// which is an illegal header that silently disables the whitelist. "*" is
+// honored only without credentials; with credentials the caller's origin is
+// reflected instead, since the spec forbids "*" together with
+// Access-Control-Allow-Credentials. vary reports whether the answer depends on
+// the request Origin (so a Vary: Origin must accompany it).
+func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) (origin string, vary bool) {
+	wildcard := false
+	for _, o := range allowed {
+		if o == "*" {
+			wildcard = true
+			continue
+		}
+		if reqOrigin != "" && o == reqOrigin {
+			return reqOrigin, true
+		}
+	}
+	if wildcard {
+		if credentials {
+			if reqOrigin != "" {
+				return reqOrigin, true
+			}
+			return "", false
+		}
+		return "*", false
+	}
+	return "", false
+}
+
+// applyCORSOrigin writes the resolved allow-origin (if any), a Vary: Origin when
+// the decision depends on the request Origin, and the credentials header only
+// when credentials are enabled and an origin was granted.
+func applyCORSOrigin(h map[string]string, allowOrigin string, vary, credentials bool) {
+	if allowOrigin != "" {
+		h[canonicalHeader(HeaderAccessControlAllowOrigin)] = allowOrigin
+	}
+	if vary {
+		key := canonicalHeader(HeaderVary)
+		switch existing := h[key]; {
+		case existing == "":
+			h[key] = "Origin"
+		case !strings.Contains(existing, "Origin"):
+			h[key] = existing + ", Origin"
+		}
+	}
+	if credentials && allowOrigin != "" {
+		h[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
 	}
 }
 
@@ -444,7 +489,13 @@ func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string
 	}
 	if keyFunc == nil {
 		keyFunc = func(req *Request) string {
-			return req.ClientIP
+			// Key on the unforgeable TCP peer IP, not the X-Forwarded-For-derived
+			// ClientIP: a client can rotate XFF every request to evade the limit
+			// and flood the storage map with unbounded keys (a secondary DoS).
+			if host, _, err := net.SplitHostPort(req.Remote); err == nil {
+				return host
+			}
+			return req.Remote
 		}
 	}
 	if storage == nil {

@@ -670,6 +670,28 @@ func TestSetCookieAttributes(t *testing.T) {
 	}
 }
 
+// TestSetCookieAttributeInjection verifies a cookie value cannot smuggle extra
+// attributes: a value like "abc; Domain=evil.com" must be sanitized, not parsed
+// back as a real Domain attribute.
+func TestSetCookieAttributeInjection(t *testing.T) {
+	rw := NewResponseWrapper(&Response{})
+	b := starlark.NewBuiltin("set_cookie", rw.setCookieMethod)
+	if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("sid"), starlark.String("abc; Domain=evil.com; HttpOnly")}, nil); err != nil {
+		t.Fatalf("set_cookie: %v", err)
+	}
+	c := rw.response.Cookies[0]
+	// Parse the emitted Set-Cookie line back and confirm no Domain was injected.
+	resp := &http.Response{Header: http.Header{"Set-Cookie": []string{c}}}
+	parsed := resp.Cookies()
+	if len(parsed) != 1 {
+		t.Fatalf("emitted line parsed into %d cookies: %q", len(parsed), c)
+	}
+	if parsed[0].Domain != "" {
+		t.Errorf("value injected a Domain attribute: %q -> Domain=%q", c, parsed[0].Domain)
+	}
+}
+
 // --- cookies -----------------------------------------------------------------
 
 // Two set_cookie calls must accumulate two distinct cookies (Set-Cookie is not

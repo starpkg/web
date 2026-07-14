@@ -40,7 +40,9 @@ func okNext(body string) NextFunc {
 func TestCORSMiddleware(t *testing.T) {
 	t.Run("preflight", func(t *testing.T) {
 		mw := corsMiddleware([]string{"https://a.test"}, nil, nil, true)
-		resp := mw(&Request{Method: http.MethodOptions, Path: "/"}, okNext("should-not-run"))
+		// A whitelisted origin is echoed back (single value), with Vary: Origin.
+		req := &Request{Method: http.MethodOptions, Path: "/", Headers: map[string]string{"Origin": "https://a.test"}}
+		resp := mw(req, okNext("should-not-run"))
 		if resp.StatusCode != 204 {
 			t.Errorf("preflight status = %d, want 204", resp.StatusCode)
 		}
@@ -53,9 +55,34 @@ func TestCORSMiddleware(t *testing.T) {
 		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)]; got != "true" {
 			t.Errorf("allow-credentials = %q, want true", got)
 		}
+		if got := resp.Headers[canonicalHeader(HeaderVary)]; !strings.Contains(got, "Origin") {
+			t.Errorf("Vary = %q, want it to include Origin", got)
+		}
 		// Default methods/headers must be filled in.
 		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowMethods)]; !strings.Contains(got, "GET") {
 			t.Errorf("allow-methods = %q, want it to include GET", got)
+		}
+	})
+
+	t.Run("non_whitelisted_origin_denied", func(t *testing.T) {
+		mw := corsMiddleware([]string{"https://a.test"}, nil, nil, true)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://evil.test"}}
+		resp := mw(req, okNext("hi"))
+		if got, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; ok {
+			t.Errorf("allow-origin = %q, want it absent for a non-whitelisted origin", got)
+		}
+		if _, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)]; ok {
+			t.Error("allow-credentials must be absent when the origin is not allowed")
+		}
+	})
+
+	t.Run("wildcard_with_credentials_reflects_origin", func(t *testing.T) {
+		// "*" + credentials is illegal; the caller's origin is reflected, never "*".
+		mw := corsMiddleware([]string{"*"}, nil, nil, true)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://c.test"}}
+		resp := mw(req, okNext("hi"))
+		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; got != "https://c.test" {
+			t.Errorf("allow-origin = %q, want the reflected origin (not *)", got)
 		}
 	})
 
@@ -76,12 +103,16 @@ func TestCORSMiddleware(t *testing.T) {
 
 	t.Run("normal_request_nil_headers_map", func(t *testing.T) {
 		mw := corsMiddleware([]string{"*"}, nil, nil, true)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://d.test"}}
 		// next returns a response with a nil Headers map; middleware must allocate it.
-		resp := mw(&Request{Method: http.MethodGet, Path: "/"}, func(*Request) *Response {
+		resp := mw(req, func(*Request) *Response {
 			return &Response{StatusCode: 200, Body: "x"}
 		})
 		if resp.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)] != "true" {
 			t.Errorf("credentials header not set on nil-headers response")
+		}
+		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; got != "https://d.test" {
+			t.Errorf("allow-origin = %q, want the reflected origin", got)
 		}
 	})
 }
@@ -263,13 +294,29 @@ func TestRateLimitMiddleware(t *testing.T) {
 	t.Run("separate_keys_counted_independently", func(t *testing.T) {
 		store := NewMemoryRateLimitStorage()
 		mw := rateLimitMiddleware(1, 60, nil, store)
-		a := &Request{Method: http.MethodGet, Path: "/", ClientIP: "10.0.0.1"}
-		b := &Request{Method: http.MethodGet, Path: "/", ClientIP: "10.0.0.2"}
+		// Distinct peers (RemoteAddr host) get independent limits.
+		a := &Request{Method: http.MethodGet, Path: "/", Remote: "10.0.0.1:1111"}
+		b := &Request{Method: http.MethodGet, Path: "/", Remote: "10.0.0.2:2222"}
 		if r := mw(a, okNext("ok")); r.StatusCode != 200 {
 			t.Fatalf("client a first = %d, want 200", r.StatusCode)
 		}
 		if r := mw(b, okNext("ok")); r.StatusCode != 200 {
 			t.Errorf("client b first = %d, want 200 (distinct key)", r.StatusCode)
+		}
+	})
+
+	t.Run("forged_xff_cannot_evade_limit", func(t *testing.T) {
+		// The default key is the unforgeable peer IP, so rotating the
+		// X-Forwarded-For-derived ClientIP every request does NOT dodge the limit.
+		store := NewMemoryRateLimitStorage()
+		mw := rateLimitMiddleware(1, 60, nil, store)
+		first := &Request{Method: http.MethodGet, Path: "/", Remote: "10.0.0.9:5000", ClientIP: "1.1.1.1"}
+		second := &Request{Method: http.MethodGet, Path: "/", Remote: "10.0.0.9:5001", ClientIP: "2.2.2.2"}
+		if r := mw(first, okNext("ok")); r.StatusCode != 200 {
+			t.Fatalf("first = %d, want 200", r.StatusCode)
+		}
+		if r := mw(second, okNext("ok")); r.StatusCode != http.StatusTooManyRequests {
+			t.Errorf("second (same peer, rotated XFF) = %d, want 429", r.StatusCode)
 		}
 	})
 }

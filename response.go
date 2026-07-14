@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"net/http"
 
 	"go.starlark.net/starlark"
 )
@@ -166,26 +167,27 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 		return nil, err
 	}
 
-	cookie := fmt.Sprintf("%s=%s; Path=%s", name, value, string(path))
-
-	if string(domain) != "" {
-		cookie += fmt.Sprintf("; Domain=%s", string(domain))
+	// Build the header through net/http, which sanitizes the name/value/path/
+	// domain. Hand-formatting with Sprintf let a value like "abc; Domain=evil.com"
+	// inject extra cookie attributes; http.Cookie.String() neutralizes that.
+	ck := &http.Cookie{
+		Name:     name,
+		Value:    value,
+		Path:     string(path),
+		Domain:   string(domain),
+		Secure:   bool(secure),
+		HttpOnly: bool(httpOnly),
 	}
-
 	if maxAge != starlark.None {
 		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
 			if age, ok := maxAgeInt.Int64(); ok {
-				cookie += fmt.Sprintf("; Max-Age=%d", age)
+				ck.MaxAge = int(age)
 			}
 		}
 	}
-
-	if bool(secure) {
-		cookie += "; Secure"
-	}
-
-	if bool(httpOnly) {
-		cookie += "; HttpOnly"
+	cookie := ck.String()
+	if cookie == "" {
+		return nil, fmt.Errorf("set_cookie: invalid cookie name %q", name)
 	}
 
 	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.
