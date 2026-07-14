@@ -342,11 +342,17 @@ func (sd *StaticDir) resolve(rel string) (string, bool) {
 
 // withinRoot reports whether p resolves to rootAbs or a path beneath it. Used
 // for the symlink real-path check (os.DirFS + fs.ValidPath handle lexical
-// traversal).
+// traversal). Containment is tested via filepath.Rel rather than a separator-
+// concatenated prefix, so it is correct when rootAbs is "/" (or a Windows volume
+// root) and is not fooled by a sibling directory sharing a name prefix.
 func withinRoot(rootAbs, p string) bool {
 	pAbs, err := filepath.Abs(p)
 	if err != nil {
 		return false
 	}
-	return pAbs == rootAbs || strings.HasPrefix(pAbs, rootAbs+string(os.PathSeparator))
+	rel, err := filepath.Rel(rootAbs, pAbs)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(os.PathSeparator)))
 }

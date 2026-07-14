@@ -910,9 +910,17 @@ defaults used by `create_server` when the corresponding argument is not provided
 the timeouts, body cap, debug mode, server header, and bind guardrail apply to
 every server the module creates.
 
-None of the `web` options are secret, so every option exposes **both**
-`get_<key>` and `set_<key>`. (A secret option would expose only its `set_<key>`
-accessor — never a getter — but this module has none.)
+Most `web` options expose **both** `get_<key>` and `set_<key>`. Two are
+**host-only** — `max_body_size` and `allow_unsafe_file_paths` — and expose only
+`get_<key>`: they are host-side safety guards (memory-DoS cap and file-path
+confinement) that an untrusted script must not be able to weaken, so they can be
+set only via Go configuration or their `WEB_*` environment variable, never a
+script `set_<key>` builtin. (No `web` option is secret; a secret option would
+expose only its `set_<key>` accessor — the inverse of host-only.)
+
+Because they are host-only, there is deliberately **no** `set_max_body_size` and
+**no** `set_allow_unsafe_file_paths` builtin — a script cannot call these; set
+them from Go configuration or the corresponding `WEB_*` environment variable.
 
 | Option | Getter | Setter | Type | Env var | Default | Description |
 |--------|--------|--------|------|---------|---------|-------------|
@@ -920,10 +928,11 @@ accessor — never a getter — but this module has none.)
 | `port` | `get_port` | `set_port` | int | `WEB_PORT` | `8080` | Default port to listen on |
 | `read_timeout` | `get_read_timeout` | `set_read_timeout` | int | `WEB_READ_TIMEOUT` | `30` | Read timeout in seconds |
 | `write_timeout` | `get_write_timeout` | `set_write_timeout` | int | `WEB_WRITE_TIMEOUT` | `30` | Write timeout in seconds |
-| `max_body_size` | `get_max_body_size` | `set_max_body_size` | int | `WEB_MAX_BODY_SIZE` | `33554432` | Maximum request body size in bytes (32 MiB) |
+| `max_body_size` | `get_max_body_size` | _(host-only)_ | int | `WEB_MAX_BODY_SIZE` | `33554432` | Maximum request body size in bytes (32 MiB) |
 | `debug_mode` | `get_debug_mode` | `set_debug_mode` | bool | `WEB_DEBUG_MODE` | `false` | Enable Gin debug logging |
 | `server_header` | `get_server_header` | `set_server_header` | string | `WEB_SERVER_HEADER` | `Starlark-Web/1.0` | Custom `Server` header value |
 | `allow_public_bind` | `get_allow_public_bind` | `set_allow_public_bind` | bool | `WEB_ALLOW_PUBLIC_BIND` | `false` | Allow binding to a non-loopback (public) address |
+| `allow_unsafe_file_paths` | `get_allow_unsafe_file_paths` | _(host-only)_ | bool | `WEB_ALLOW_UNSAFE_FILE_PATHS` | `false` | Allow `file_response`/`send_file` to serve paths outside the working directory |
 
 **Example:**
 
@@ -931,13 +940,13 @@ accessor — never a getter — but this module has none.)
 load(
     "web",
     "create_server",
-    # getters
+    # getters (host-only max_body_size / allow_unsafe_file_paths have no setter)
     "get_host", "get_port", "get_read_timeout", "get_write_timeout",
     "get_max_body_size", "get_debug_mode", "get_server_header",
-    "get_allow_public_bind",
+    "get_allow_public_bind", "get_allow_unsafe_file_paths",
     # setters
     "set_host", "set_port", "set_read_timeout", "set_write_timeout",
-    "set_max_body_size", "set_debug_mode", "set_server_header",
+    "set_debug_mode", "set_server_header",
     "set_allow_public_bind",
 )
 

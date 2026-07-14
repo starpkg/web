@@ -2,10 +2,15 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -37,23 +42,24 @@ func (m *Middleware) MatchesPath(path string) bool {
 
 // Server represents an HTTP server instance
 type Server struct {
-	host               string
-	port               int
-	engine             *gin.Engine
-	httpServer         *http.Server
-	running            bool
-	startErr           error   // Captures a failed ListenAndServe from Start()'s goroutine
-	module             *Module // Reference to module for config access
-	readTimeout        time.Duration
-	writeTimeout       time.Duration
-	maxBodySize        int64
-	serverHeader       string
-	allowPublicBind    bool          // When false, refuse to bind to a non-loopback address
-	middleware         []*Middleware // All middleware with path patterns
-	errorHandlers      *ErrorHandlerRegistry
-	ginMiddlewareAdded bool           // Flag to prevent multiple Gin middleware additions
-	staticMounts       []*staticMount // Read-only static-file roots, served as a NoRoute fallback
-	mu                 sync.RWMutex   // Protects running, httpServer, staticMounts fields
+	host                 string
+	port                 int
+	engine               *gin.Engine
+	httpServer           *http.Server
+	running              bool
+	startErr             error   // Captures a failed ListenAndServe from Start()'s goroutine
+	module               *Module // Reference to module for config access
+	readTimeout          time.Duration
+	writeTimeout         time.Duration
+	maxBodySize          int64
+	serverHeader         string
+	allowPublicBind      bool          // When false, refuse to bind to a non-loopback address
+	allowUnsafeFilePaths bool          // When false, confine file_response/send_file to the working directory
+	middleware           []*Middleware // All middleware with path patterns
+	errorHandlers        *ErrorHandlerRegistry
+	ginMiddlewareAdded   bool           // Flag to prevent multiple Gin middleware additions
+	staticMounts         []*staticMount // Read-only static-file roots, served as a NoRoute fallback
+	mu                   sync.RWMutex   // Protects running, httpServer, staticMounts fields
 }
 
 // newServer creates a new Server instance with module configuration
@@ -71,6 +77,7 @@ func newServer(module *Module, host string, port int) *Server {
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 	allowPublicBind := module.ext.GetBool(configKeyAllowPublicBind)
+	allowUnsafeFilePaths := module.ext.GetBool(configKeyAllowUnsafeFilePaths)
 
 	// Set gin mode - ensure release mode by default to avoid debug output
 	if debugMode {
@@ -81,6 +88,10 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Create gin engine
 	engine := gin.New()
+	// Trust no proxy by default so c.ClientIP() reflects the real TCP peer: a
+	// client-supplied X-Forwarded-For cannot then spoof the client IP that rate
+	// limiting and audit rely on. gin.New() otherwise trusts every proxy.
+	_ = engine.SetTrustedProxies(nil)
 	engine.Use(gin.Recovery())
 	if debugMode {
 		engine.Use(gin.Logger())
@@ -91,21 +102,44 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Create server instance first
 	server := &Server{
-		host:               host,
-		port:               port,
-		engine:             engine,
-		httpServer:         nil,
-		running:            false,
-		module:             module,
-		readTimeout:        readTimeout,
-		writeTimeout:       writeTimeout,
-		maxBodySize:        maxBodySize,
-		serverHeader:       serverHeader,
-		allowPublicBind:    allowPublicBind,
-		middleware:         make([]*Middleware, 0),
-		errorHandlers:      NewErrorHandlerRegistry(),
-		ginMiddlewareAdded: false,
+		host:                 host,
+		port:                 port,
+		engine:               engine,
+		httpServer:           nil,
+		running:              false,
+		module:               module,
+		readTimeout:          readTimeout,
+		writeTimeout:         writeTimeout,
+		maxBodySize:          maxBodySize,
+		serverHeader:         serverHeader,
+		allowPublicBind:      allowPublicBind,
+		allowUnsafeFilePaths: allowUnsafeFilePaths,
+		middleware:           make([]*Middleware, 0),
+		errorHandlers:        NewErrorHandlerRegistry(),
+		ginMiddlewareAdded:   false,
 	}
+
+	// Bound every request body before any handler buffers it, so a chunked or
+	// unknown-length body cannot be read unboundedly into memory (OOM DoS). This
+	// ingress middleware runs ahead of route handlers, the custom-middleware
+	// chain, and the NoRoute/NoMethod paths — all of which read the body via
+	// createRequestFromGin. (A max of MaxInt64 is treated as unbounded to avoid
+	// MaxBytesReader's internal limit+1 overflow.)
+	engine.Use(func(c *gin.Context) {
+		if server.maxBodySize > 0 && server.maxBodySize < math.MaxInt64 {
+			// Wrap BEFORE the declared-length fast path, so that even a custom
+			// 413 error handler dispatched below (which reads the body via
+			// createRequestFromGin) sees the bounded body rather than buffering
+			// the whole oversized request.
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, server.maxBodySize)
+			if c.Request.ContentLength > server.maxBodySize {
+				server.applyResponse(c, createRequestEntityTooLargeResponse(server.maxBodySize))
+				c.Abort()
+				return
+			}
+		}
+		c.Next()
+	})
 
 	// Now configure NoRoute and NoMethod handlers with access to server
 	engine.NoMethod(func(c *gin.Context) {
@@ -300,14 +334,18 @@ func (s *Server) Route(methods interface{}, path string, handler starlark.Callab
 // converting HTTP requests to Starlark objects and handling response conversion.
 func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check request body size if configured
-		if s.maxBodySize > 0 && c.Request.ContentLength > s.maxBodySize {
-			sendBadRequest(c, "Request body too large")
-			return
-		}
-
-		// Create request object
+		// The request body is already bounded by the ingress middleware installed
+		// in newServer (which covers every body-reading path). Create the request
+		// object; if the body overran the cap while being buffered, reject it with
+		// a 413 before the handler runs rather than passing a truncated body.
 		req := s.createRequest(c)
+		if req.bodyErr != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(req.bodyErr, &maxErr) {
+				s.applyResponse(c, createRequestEntityTooLargeResponse(s.maxBodySize))
+				return
+			}
+		}
 
 		// Create the final handler function
 		finalHandler := func(req *Request) *Response {
@@ -409,9 +447,11 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 				c.Writer.Header().Add("Set-Cookie", cookie)
 			}
 
-			// Handle file response
+			// Handle file response (confined unless allow_unsafe_file_paths is set)
 			if customResponse.FilePath != "" {
-				c.File(customResponse.FilePath)
+				if !s.serveConfinedFile(c, customResponse.FilePath) {
+					sendNotFound(c, "File not found")
+				}
 				return
 			}
 
@@ -438,9 +478,11 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 		c.Writer.Header().Add("Set-Cookie", cookie)
 	}
 
-	// Handle file response
+	// Handle file response (confined unless allow_unsafe_file_paths is set)
 	if response.FilePath != "" {
-		c.File(response.FilePath)
+		if !s.serveConfinedFile(c, response.FilePath) {
+			sendNotFound(c, "File not found")
+		}
 		return
 	}
 
@@ -452,6 +494,80 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 	// Handle regular response
 	c.Data(response.StatusCode, contentType, []byte(response.Body))
+}
+
+// serveConfinedFile serves a path a script asked to return (via file_response /
+// send_file / a directly-set Response.file_path). Unless allow_unsafe_file_paths
+// is set, it opens the file first and then validates the open descriptor: it
+// must be a regular file — never a directory, which http.ServeFile would turn
+// into an index page or listing, nor a FIFO/device that could block — whose real
+// path stays under the process working directory. It is then served from that
+// same descriptor, which narrows the check-to-serve TOCTOU window and stops an
+// untrusted script from reading arbitrary host files or echoing a request
+// parameter straight into a file read. (Static mounts have their own confinement
+// in static.go.) Returns true when it wrote a response.
+func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
+	if s.allowUnsafeFilePaths {
+		c.File(p) // opt-out: unrestricted serving (historical behavior)
+		return true
+	}
+	real, ok := s.resolveConfinedFile(p)
+	if !ok {
+		return false
+	}
+	f, err := os.Open(real)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	// Infer the content type from the REQUESTED name, not the symlink target's,
+	// so a ".json" alias of a ".html" file is not served as active HTML.
+	http.ServeContent(c.Writer, c.Request, filepath.Base(p), fi.ModTime(), f)
+	return true
+}
+
+// resolveConfinedFile resolves p to a symlink-free physical path, confirms it is
+// a regular file under the working directory, and returns it. Resolving and
+// checking BEFORE any open means an outside target is never opened — so a
+// FIFO/device outside the root cannot block os.Open — and a directory (which
+// http.ServeFile would list) is rejected.
+func (s *Server) resolveConfinedFile(p string) (string, bool) {
+	if strings.TrimSpace(p) == "" {
+		return "", false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return "", false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return "", false
+	}
+	realRoot, ok := workingDirReal()
+	if !ok || !withinRoot(realRoot, real) {
+		return "", false
+	}
+	// real is symlink-free, so Lstat == Stat: reject a directory or FIFO/device.
+	if fi, err := os.Lstat(real); err != nil || !fi.Mode().IsRegular() {
+		return "", false
+	}
+	return real, true
+}
+
+// workingDirReal returns the symlink-resolved process working directory.
+func workingDirReal() (string, bool) {
+	root, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	if rr, err := filepath.EvalSymlinks(root); err == nil {
+		return rr, true
+	}
+	return root, true
 }
 
 // Server lifecycle methods

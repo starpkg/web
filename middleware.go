@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"compress/gzip"
 	"fmt"
+	"net"
 	"net/http"
 	"strconv"
 	"strings"
@@ -128,34 +129,133 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 	}
 
 	return func(req *Request, next NextFunc) *Response {
+		reqOrigin := req.Headers["Origin"]
+		allowOrigin := corsAllowOrigin(origins, reqOrigin, credentials)
+
 		// Handle preflight requests
 		if req.Method == http.MethodOptions {
-			return &Response{
-				StatusCode: 204,
-				Headers: map[string]string{
-					canonicalHeader(HeaderAccessControlAllowOrigin):      strings.Join(origins, ", "),
-					canonicalHeader(HeaderAccessControlAllowMethods):     strings.Join(methods, ", "),
-					canonicalHeader(HeaderAccessControlAllowHeaders):     strings.Join(headers, ", "),
-					canonicalHeader(HeaderAccessControlAllowCredentials): fmt.Sprintf("%t", credentials),
-				},
-				Body: "",
+			h := map[string]string{
+				canonicalHeader(HeaderAccessControlAllowMethods): strings.Join(methods, ", "),
+				canonicalHeader(HeaderAccessControlAllowHeaders): strings.Join(headers, ", "),
 			}
+			applyCORSOrigin(h, allowOrigin, credentials)
+			return &Response{StatusCode: 204, Headers: h, Body: ""}
 		}
 
 		// Process normal requests
 		response := next(req)
-
-		// Add CORS headers to response
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		response.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)] = strings.Join(origins, ", ")
-		if credentials {
-			response.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
-		}
-
+		applyCORSOrigin(response.Headers, allowOrigin, credentials)
 		return response
 	}
+}
+
+// corsAllowOrigin decides the single Access-Control-Allow-Origin value for a
+// request. A configured exact origin is echoed back — never a comma-joined list,
+// which is an illegal header that silently disables the whitelist. "*" is honored
+// ONLY without credentials: the spec forbids "*" alongside
+// Access-Control-Allow-Credentials, and reflecting an arbitrary origin with
+// credentials would grant every site credentialed access, so with credentials
+// only an explicit exact origin is allowed. Returns "" when the origin is denied.
+func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) string {
+	if reqOrigin != "" && reqOrigin != "*" && stringInList(allowed, reqOrigin) {
+		return reqOrigin
+	}
+	if !credentials && stringInList(allowed, "*") {
+		return "*"
+	}
+	return ""
+}
+
+// stringInList reports whether want appears in list.
+func stringInList(list []string, want string) bool {
+	for _, s := range list {
+		if s == want {
+			return true
+		}
+	}
+	return false
+}
+
+// applyCORSOrigin writes the CORS decision. It always adds Vary: Origin (the
+// response is origin-dependent, so a shared cache must key on Origin whether or
+// not the origin was granted), clears any allow-origin/credentials a downstream
+// handler may have set (so an unlisted origin cannot be authorized past this
+// policy), and sets the credentials header only when credentials are enabled and
+// an origin was granted.
+func applyCORSOrigin(h map[string]string, allowOrigin string, credentials bool) {
+	addVaryToken(h, "Origin")
+	// Clear any allow-origin/credentials a handler set, case-insensitively: a
+	// script can create a lowercase header key that would otherwise survive this
+	// policy and authorize an unlisted origin once emission canonicalizes it.
+	deleteHeaderFold(h, HeaderAccessControlAllowOrigin)
+	deleteHeaderFold(h, HeaderAccessControlAllowCredentials)
+	if allowOrigin == "" {
+		return
+	}
+	h[canonicalHeader(HeaderAccessControlAllowOrigin)] = allowOrigin
+	if credentials {
+		h[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
+	}
+}
+
+// deleteHeaderFold removes every case-variant of header name from h.
+func deleteHeaderFold(h map[string]string, name string) {
+	for k := range h {
+		if strings.EqualFold(k, name) {
+			delete(h, k)
+		}
+	}
+}
+
+// addVaryToken adds token to the Vary header as a case-insensitive comma-
+// separated token list, coalescing any case-variant Vary keys a handler may have
+// set into the canonical one (so the token is neither lost nor duplicated at
+// emission) and leaving a wildcard (Vary: *) untouched.
+func addVaryToken(h map[string]string, token string) {
+	key := canonicalHeader(HeaderVary)
+	existing := coalesceVary(h, key)
+	switch {
+	case existing == "":
+		h[key] = token
+	case strings.TrimSpace(existing) == "*" || varyHasToken(existing, token):
+		h[key] = existing
+	default:
+		h[key] = existing + ", " + token
+	}
+}
+
+// coalesceVary merges any case-variant Vary keys in h into the canonical key and
+// returns their combined value.
+func coalesceVary(h map[string]string, key string) string {
+	existing := ""
+	for k, v := range h {
+		if !strings.EqualFold(k, HeaderVary) {
+			continue
+		}
+		if existing == "" {
+			existing = v
+		} else {
+			existing += ", " + v
+		}
+		if k != key {
+			delete(h, k)
+		}
+	}
+	return existing
+}
+
+// varyHasToken reports whether the comma-separated Vary value already contains
+// token (case-insensitive).
+func varyHasToken(vary, token string) bool {
+	for _, t := range strings.Split(vary, ",") {
+		if strings.EqualFold(strings.TrimSpace(t), token) {
+			return true
+		}
+	}
+	return false
 }
 
 // loggingMiddleware creates a logging middleware
@@ -341,7 +441,7 @@ func compressionMiddleware(level int, minSize int, types []string) MiddlewareFun
 			response.Headers = make(map[string]string)
 		}
 		response.Headers[canonicalHeader(HeaderContentEncoding)] = "gzip"
-		response.Headers[canonicalHeader(HeaderVary)] = "Accept-Encoding"
+		addVaryToken(response.Headers, "Accept-Encoding") // merge, don't clobber a CORS Vary: Origin
 		response.Headers[canonicalHeader(HeaderContentLength)] = strconv.Itoa(buf.Len())
 		response.Body = buf.String()
 
@@ -444,7 +544,13 @@ func rateLimitMiddleware(requests int, window int, keyFunc func(*Request) string
 	}
 	if keyFunc == nil {
 		keyFunc = func(req *Request) string {
-			return req.ClientIP
+			// Key on the unforgeable TCP peer IP, not the X-Forwarded-For-derived
+			// ClientIP: a client can rotate XFF every request to evade the limit
+			// and flood the storage map with unbounded keys (a secondary DoS).
+			if host, _, err := net.SplitHostPort(req.Remote); err == nil {
+				return host
+			}
+			return req.Remote
 		}
 	}
 	if storage == nil {
@@ -521,8 +627,8 @@ func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string)
 		}
 		response.Headers[canonicalHeader(HeaderCacheControl)] = cacheControl
 
-		if len(vary) > 0 {
-			response.Headers[canonicalHeader(HeaderVary)] = strings.Join(vary, ", ")
+		for _, v := range vary {
+			addVaryToken(response.Headers, v) // merge each token, preserving any existing Vary (e.g. CORS Origin)
 		}
 
 		return response

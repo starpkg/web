@@ -6,7 +6,7 @@ package web
 
 import (
 	"fmt"
-	"strings"
+	"mime"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -30,6 +30,11 @@ const (
 	// reachable) address. It defaults to false so a server started from an
 	// untrusted script stays on localhost unless the host explicitly opts in.
 	configKeyAllowPublicBind = "allow_public_bind"
+	// configKeyAllowUnsafeFilePaths gates serving a file whose path escapes the
+	// working directory (an absolute host path or a traversal). It defaults to
+	// false so file_response/send_file confine reads to the app directory unless
+	// the host explicitly opts in.
+	configKeyAllowUnsafeFilePaths = "allow_unsafe_file_paths"
 )
 
 var (
@@ -52,21 +57,22 @@ func NewModule() *Module {
 		genConfigOption(configKeyPort, "Default port to listen on", 8080),
 		genConfigOption(configKeyReadTimeout, "Read timeout in seconds", 30),
 		genConfigOption(configKeyWriteTimeout, "Write timeout in seconds", 30),
-		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
+		// Host-only: a memory-DoS guard an untrusted script must not be able to raise/disable.
+		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)).SetHostOnly(true), // 32MB
 		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
 		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 		genConfigOption(configKeyAllowPublicBind, "Allow binding to a non-loopback (public) address", false),
+		// Host-only: a script must not be able to lift its own file-path confinement.
+		genConfigOption(configKeyAllowUnsafeFilePaths, "Allow file_response/send_file to serve paths outside the working directory", false).SetHostOnly(true),
 	)
 }
 
 // Helper functions
 
-// genConfigOption creates a configuration option with common settings
+// genConfigOption creates a configuration option with common settings, deriving
+// the conventional WEB_<NAME> environment variable via base's shared helper.
 func genConfigOption[T any](name, description string, defaultValue T) *base.ConfigOption[T] {
-	return base.NewConfigOption(defaultValue).
-		WithName(name).
-		WithDescription(description).
-		WithEnvVar(strings.ToUpper(ModuleName + "_" + name))
+	return base.NewNamedConfigOption(ModuleName, name, description, defaultValue)
 }
 
 // newModuleWithOptions creates a Module with the given configuration options
@@ -79,6 +85,7 @@ func newModuleWithOptions(
 	debugModeOpt *base.ConfigOption[bool],
 	serverHeaderOpt *base.ConfigOption[string],
 	allowPublicBindOpt *base.ConfigOption[bool],
+	allowUnsafeFilePathsOpt *base.ConfigOption[bool],
 ) *Module {
 	cm, _ := base.NewConfigurableModuleWithConfigOptions(
 		hostOpt,
@@ -89,6 +96,7 @@ func newModuleWithOptions(
 		debugModeOpt,
 		serverHeaderOpt,
 		allowPublicBindOpt,
+		allowUnsafeFilePathsOpt,
 	)
 	return &Module{
 		cfgMod: cm,
@@ -367,7 +375,10 @@ func (m *Module) fileResponse(thread *starlark.Thread, b *starlark.Builtin, args
 	}
 
 	if filename != "" {
-		response.Headers[canonicalHeader(HeaderContentDisposition)] = fmt.Sprintf("attachment; filename=%s", string(filename))
+		// Format through mime so a filename cannot inject extra header tokens.
+		if cd := mime.FormatMediaType("attachment", map[string]string{"filename": string(filename)}); cd != "" {
+			response.Headers[canonicalHeader(HeaderContentDisposition)] = cd
+		}
 	}
 
 	return NewResponseWrapper(response), nil
@@ -472,10 +483,13 @@ func (m *Module) sendData(thread *starlark.Thread, b *starlark.Builtin, args sta
 	response := &Response{
 		StatusCode: 200,
 		Headers: map[string]string{
-			canonicalHeader(HeaderContentType):        string(contentType),
-			canonicalHeader(HeaderContentDisposition): fmt.Sprintf("attachment; filename=%s", string(filename)),
+			canonicalHeader(HeaderContentType): string(contentType),
 		},
 		Body: string(data),
+	}
+	// Format through mime so a filename cannot inject extra header tokens.
+	if cd := mime.FormatMediaType("attachment", map[string]string{"filename": string(filename)}); cd != "" {
+		response.Headers[canonicalHeader(HeaderContentDisposition)] = cd
 	}
 
 	return NewResponseWrapper(response), nil

@@ -15,6 +15,7 @@ package web
 //   - cookies: set_cookie/delete_cookie produce distinct Set-Cookie header lines
 
 import (
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -667,6 +668,81 @@ func TestSetCookieAttributes(t *testing.T) {
 		if !strings.Contains(c, want) {
 			t.Errorf("cookie %q missing %q", c, want)
 		}
+	}
+}
+
+// TestSetCookieAttributeInjection verifies a cookie value cannot smuggle extra
+// attributes: a value like "abc; Domain=evil.com" must be sanitized, not parsed
+// back as a real Domain attribute.
+func TestSetCookieAttributeInjection(t *testing.T) {
+	rw := NewResponseWrapper(&Response{})
+	b := starlark.NewBuiltin("set_cookie", rw.setCookieMethod)
+	if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("sid"), starlark.String("abc; Domain=evil.com; HttpOnly")}, nil); err != nil {
+		t.Fatalf("set_cookie: %v", err)
+	}
+	c := rw.response.Cookies[0]
+	// Parse the emitted Set-Cookie line back and confirm no Domain was injected.
+	resp := &http.Response{Header: http.Header{"Set-Cookie": []string{c}}}
+	parsed := resp.Cookies()
+	if len(parsed) != 1 {
+		t.Fatalf("emitted line parsed into %d cookies: %q", len(parsed), c)
+	}
+	if parsed[0].Domain != "" {
+		t.Errorf("value injected a Domain attribute: %q -> Domain=%q", c, parsed[0].Domain)
+	}
+}
+
+// TestSetCookieMaxAgeBounds verifies max_age handling: an explicit non-positive
+// value expires the cookie (Max-Age=0), and a value too large for int64 is
+// resolved by sign rather than silently dropping the attribute.
+func TestSetCookieMaxAgeBounds(t *testing.T) {
+	set := func(maxAge starlark.Value) string {
+		rw := NewResponseWrapper(&Response{})
+		b := starlark.NewBuiltin("set_cookie", rw.setCookieMethod)
+		if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+			starlark.Tuple{starlark.String("sid"), starlark.String("v")},
+			[]starlark.Tuple{{starlark.String("max_age"), maxAge}}); err != nil {
+			t.Fatalf("set_cookie: %v", err)
+		}
+		return rw.response.Cookies[0]
+	}
+	pos := new(big.Int).Lsh(big.NewInt(1), 100) // 2^100, beyond int64
+	neg := new(big.Int).Neg(pos)
+	// explicit 0 -> expire now (Max-Age=0), not "omit attribute"
+	if c := set(starlark.MakeInt(0)); !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("max_age=0: %q, want Max-Age=0", c)
+	}
+	// huge negative (beyond int64) -> still expire, not dropped
+	if c := set(starlark.MakeBigInt(neg)); !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("max_age=-(1<<100): %q, want Max-Age=0 (expire)", c)
+	}
+	// huge positive (beyond int64) -> clamped, still present
+	if c := set(starlark.MakeBigInt(pos)); !strings.Contains(c, "Max-Age=2147483647") {
+		t.Errorf("max_age=1<<100: %q, want Max-Age clamped to MaxInt32", c)
+	}
+}
+
+// TestDeleteCookieAttributeInjection verifies delete_cookie also serializes
+// through net/http, so a path/domain cannot inject attributes that widen or
+// redirect the deletion's scope.
+func TestDeleteCookieAttributeInjection(t *testing.T) {
+	rw := NewResponseWrapper(&Response{})
+	b := starlark.NewBuiltin("delete_cookie", rw.deleteCookieMethod)
+	if _, err := rw.deleteCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("sid")},
+		[]starlark.Tuple{{starlark.String("path"), starlark.String("/; Domain=evil.com")}}); err != nil {
+		t.Fatalf("delete_cookie: %v", err)
+	}
+	c := rw.response.Cookies[0]
+	resp := &http.Response{Header: http.Header{"Set-Cookie": []string{c}}}
+	parsed := resp.Cookies()
+	if len(parsed) != 1 || parsed[0].Domain != "" {
+		t.Errorf("path injected an attribute: %q -> %+v", c, parsed)
+	}
+	// It must still expire the cookie (Max-Age=0).
+	if !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("delete_cookie must emit Max-Age=0, got %q", c)
 	}
 }
 
