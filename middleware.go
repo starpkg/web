@@ -160,9 +160,9 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 // credentials would grant every site credentialed access, so with credentials
 // only an explicit exact origin is allowed. Returns "" when the origin is denied.
 func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) string {
-	if reqOrigin != "" {
+	if reqOrigin != "" && reqOrigin != "*" {
 		for _, o := range allowed {
-			if o == reqOrigin {
+			if o != "*" && o == reqOrigin {
 				return reqOrigin
 			}
 		}
@@ -185,36 +185,59 @@ func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) strin
 // an origin was granted.
 func applyCORSOrigin(h map[string]string, allowOrigin string, credentials bool) {
 	addVaryToken(h, "Origin")
-	acao := canonicalHeader(HeaderAccessControlAllowOrigin)
-	acac := canonicalHeader(HeaderAccessControlAllowCredentials)
+	// Clear any allow-origin/credentials a handler set, case-insensitively: a
+	// script can create a lowercase header key that would otherwise survive this
+	// policy and authorize an unlisted origin once emission canonicalizes it.
+	deleteHeaderFold(h, HeaderAccessControlAllowOrigin)
+	deleteHeaderFold(h, HeaderAccessControlAllowCredentials)
 	if allowOrigin == "" {
-		delete(h, acao)
-		delete(h, acac)
 		return
 	}
-	h[acao] = allowOrigin
+	h[canonicalHeader(HeaderAccessControlAllowOrigin)] = allowOrigin
 	if credentials {
-		h[acac] = "true"
-	} else {
-		delete(h, acac)
+		h[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
 	}
 }
 
-// addVaryToken adds token to the Vary header, treating the existing value as a
-// case-insensitive comma-separated token list and leaving a wildcard (Vary: *)
-// untouched.
+// deleteHeaderFold removes every case-variant of header name from h.
+func deleteHeaderFold(h map[string]string, name string) {
+	for k := range h {
+		if strings.EqualFold(k, name) {
+			delete(h, k)
+		}
+	}
+}
+
+// addVaryToken adds token to the Vary header as a case-insensitive comma-
+// separated token list, coalescing any case-variant Vary keys a handler may have
+// set into the canonical one (so the token is neither lost nor duplicated at
+// emission) and leaving a wildcard (Vary: *) untouched.
 func addVaryToken(h map[string]string, token string) {
 	key := canonicalHeader(HeaderVary)
-	existing := h[key]
-	if existing == "" {
+	existing := ""
+	for k, v := range h {
+		if strings.EqualFold(k, HeaderVary) {
+			if existing == "" {
+				existing = v
+			} else {
+				existing += ", " + v
+			}
+			if k != key {
+				delete(h, k)
+			}
+		}
+	}
+	switch {
+	case existing == "":
 		h[key] = token
 		return
-	}
-	if strings.TrimSpace(existing) == "*" {
+	case strings.TrimSpace(existing) == "*":
+		h[key] = existing
 		return
 	}
 	for _, t := range strings.Split(existing, ",") {
 		if strings.EqualFold(strings.TrimSpace(t), token) {
+			h[key] = existing
 			return
 		}
 	}

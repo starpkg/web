@@ -127,12 +127,16 @@ func newServer(module *Module, host string, port int) *Server {
 	// MaxBytesReader's internal limit+1 overflow.)
 	engine.Use(func(c *gin.Context) {
 		if server.maxBodySize > 0 && server.maxBodySize < math.MaxInt64 {
+			// Wrap BEFORE the declared-length fast path, so that even a custom
+			// 413 error handler dispatched below (which reads the body via
+			// createRequestFromGin) sees the bounded body rather than buffering
+			// the whole oversized request.
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, server.maxBodySize)
 			if c.Request.ContentLength > server.maxBodySize {
 				server.applyResponse(c, createRequestEntityTooLargeResponse(server.maxBodySize))
 				c.Abort()
 				return
 			}
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, server.maxBodySize)
 		}
 		c.Next()
 	})
@@ -514,15 +518,9 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 	if err != nil {
 		return false
 	}
-	f, err := os.Open(abs)
-	if err != nil {
-		return false
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil || !fi.Mode().IsRegular() {
-		return false
-	}
+	// Resolve symlinks to a physical path and confirm it is under the working
+	// directory BEFORE opening anything, so an outside target is never opened —
+	// this also means a FIFO/device outside the root can't block os.Open.
 	real, err := filepath.EvalSymlinks(abs)
 	if err != nil {
 		return false
@@ -536,6 +534,20 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 		realRoot = root
 	}
 	if !withinRoot(realRoot, real) {
+		return false
+	}
+	// real is symlink-free, so Lstat == Stat: reject a directory (ServeFile would
+	// list it) or a FIFO/device (which could block on open) before opening.
+	if fi, err := os.Lstat(real); err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	f, err := os.Open(real)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
 	http.ServeContent(c.Writer, c.Request, fi.Name(), fi.ModTime(), f)

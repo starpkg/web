@@ -130,7 +130,10 @@ The module's options (`host`, `port`, `read_timeout`, `write_timeout`,
 per-option `get_<key>` / `set_<key>` accessor builtins, and serve as defaults for
 the servers the module creates. Two opt-in levers default to off: `allow_public_bind`
 lets the host expose a server beyond loopback, and `allow_unsafe_file_paths` lets
-`file_response`/`send_file` serve files outside the working directory. See the
+`file_response`/`send_file` serve files outside the working directory. Both
+`allow_unsafe_file_paths` and `max_body_size` are **host-only** (no `set_<key>`
+builtin) — an untrusted script cannot weaken these safety guards; set them via
+Go config or `WEB_*`. See the
 [Configuration section of docs/API.md](docs/API.md#configuration) for the full
 option table, defaults, accessors, and the bind-guardrail details.
 

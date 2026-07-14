@@ -95,6 +95,32 @@ func TestCORSMiddleware(t *testing.T) {
 		}
 	})
 
+	t.Run("literal_star_origin_not_matched", func(t *testing.T) {
+		// A raw Origin of "*" must not match the "*" config entry as an exact
+		// origin (which would emit the forbidden ACAO:* + ACAC:true combo).
+		mw := corsMiddleware([]string{"*"}, nil, nil, true)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "*"}}
+		resp := mw(req, okNext("hi"))
+		if got, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; ok {
+			t.Errorf("allow-origin = %q, want it absent for a literal '*' origin with credentials", got)
+		}
+	})
+
+	t.Run("lowercase_downstream_allow_origin_cleared_on_deny", func(t *testing.T) {
+		// A handler-set lowercase allow-origin key must also be cleared on deny,
+		// or it would survive and authorize the origin once emission canonicalizes it.
+		mw := corsMiddleware([]string{"https://a.test"}, nil, nil, false)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://evil.test"}}
+		resp := mw(req, func(*Request) *Response {
+			return &Response{StatusCode: 200, Headers: map[string]string{"access-control-allow-origin": "https://evil.test"}}
+		})
+		for k, v := range resp.Headers {
+			if strings.EqualFold(k, HeaderAccessControlAllowOrigin) {
+				t.Errorf("allow-origin (%q=%q) survived deny, want it cleared", k, v)
+			}
+		}
+	})
+
 	t.Run("wildcard_with_credentials_denied", func(t *testing.T) {
 		// "*" + credentials is illegal and reflecting an arbitrary origin with
 		// credentials is unsafe; only an explicit exact origin may be granted, so
