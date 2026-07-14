@@ -550,7 +550,9 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 	if err != nil || !fi.Mode().IsRegular() {
 		return false
 	}
-	http.ServeContent(c.Writer, c.Request, fi.Name(), fi.ModTime(), f)
+	// Infer the content type from the REQUESTED name, not the symlink target's,
+	// so a ".json" alias of a ".html" file is not served as active HTML.
+	http.ServeContent(c.Writer, c.Request, filepath.Base(abs), fi.ModTime(), f)
 	return true
 }
 

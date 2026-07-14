@@ -603,6 +603,29 @@ func TestServableFilePathConfinement(t *testing.T) {
 			t.Errorf("opt-out: status = %d body = %q, want 200 serving the file", rec.Code, rec.Body.String())
 		}
 	})
+
+	t.Run("mime_from_requested_name_not_symlink_target", func(t *testing.T) {
+		// An in-root ".json" symlink to a ".html" file must be served with a type
+		// inferred from the requested ".json", not the target ".html" (which would
+		// let an alias serve active HTML).
+		target := "probe_alias_target.html"
+		if err := os.WriteFile(target, []byte("<h1>hi</h1>"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		defer os.Remove(target)
+		alias := "probe_alias.json"
+		if err := os.Symlink(target, alias); err != nil {
+			t.Skipf("symlink unsupported: %v", err)
+		}
+		defer os.Remove(alias)
+		rec := serve(newServer(NewModule(), "localhost", 0), alias)
+		if rec.Code != 200 {
+			t.Fatalf("alias: status = %d, want 200", rec.Code)
+		}
+		if ct := rec.Header().Get("Content-Type"); strings.Contains(ct, "html") {
+			t.Errorf("Content-Type = %q, inferred from the symlink target; want it from the requested .json", ct)
+		}
+	})
 }
 
 // applyResponse must serve a file when FilePath is set, and route a >=400

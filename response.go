@@ -181,11 +181,10 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 	}
 	if maxAge != starlark.None {
 		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
+			// http.Cookie treats MaxAge 0 as "omit the attribute", so an explicit
+			// non-positive max_age (expire now) maps to a negative value, which
+			// emits "Max-Age=0". Clamp so int(age) cannot overflow a 32-bit int.
 			if age, ok := maxAgeInt.Int64(); ok {
-				// http.Cookie treats MaxAge 0 as "omit the attribute", so an
-				// explicit non-positive max_age (expire now) maps to a negative
-				// value, which emits "Max-Age=0". Clamp so int(age) cannot
-				// overflow a 32-bit int.
 				switch {
 				case age <= 0:
 					ck.MaxAge = -1
@@ -194,6 +193,11 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 				default:
 					ck.MaxAge = int(age)
 				}
+			} else if maxAgeInt.Sign() < 0 {
+				// Too large to fit int64: a huge negative value still means expire.
+				ck.MaxAge = -1
+			} else {
+				ck.MaxAge = math.MaxInt32
 			}
 		}
 	}

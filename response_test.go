@@ -15,6 +15,7 @@ package web
 //   - cookies: set_cookie/delete_cookie produce distinct Set-Cookie header lines
 
 import (
+	"math/big"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -689,6 +690,36 @@ func TestSetCookieAttributeInjection(t *testing.T) {
 	}
 	if parsed[0].Domain != "" {
 		t.Errorf("value injected a Domain attribute: %q -> Domain=%q", c, parsed[0].Domain)
+	}
+}
+
+// TestSetCookieMaxAgeBounds verifies max_age handling: an explicit non-positive
+// value expires the cookie (Max-Age=0), and a value too large for int64 is
+// resolved by sign rather than silently dropping the attribute.
+func TestSetCookieMaxAgeBounds(t *testing.T) {
+	set := func(maxAge starlark.Value) string {
+		rw := NewResponseWrapper(&Response{})
+		b := starlark.NewBuiltin("set_cookie", rw.setCookieMethod)
+		if _, err := rw.setCookieMethod(&starlark.Thread{}, b,
+			starlark.Tuple{starlark.String("sid"), starlark.String("v")},
+			[]starlark.Tuple{{starlark.String("max_age"), maxAge}}); err != nil {
+			t.Fatalf("set_cookie: %v", err)
+		}
+		return rw.response.Cookies[0]
+	}
+	pos := new(big.Int).Lsh(big.NewInt(1), 100) // 2^100, beyond int64
+	neg := new(big.Int).Neg(pos)
+	// explicit 0 -> expire now (Max-Age=0), not "omit attribute"
+	if c := set(starlark.MakeInt(0)); !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("max_age=0: %q, want Max-Age=0", c)
+	}
+	// huge negative (beyond int64) -> still expire, not dropped
+	if c := set(starlark.MakeBigInt(neg)); !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("max_age=-(1<<100): %q, want Max-Age=0 (expire)", c)
+	}
+	// huge positive (beyond int64) -> clamped, still present
+	if c := set(starlark.MakeBigInt(pos)); !strings.Contains(c, "Max-Age=2147483647") {
+		t.Errorf("max_age=1<<100: %q, want Max-Age clamped to MaxInt32", c)
 	}
 }
 
