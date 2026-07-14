@@ -15,6 +15,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
@@ -100,6 +102,7 @@ func TestServerBindGuardOptIn(t *testing.T) {
 		genConfigOption(configKeyDebugMode, "debug", false),
 		genConfigOption(configKeyServerHeader, "header", "Test/1.0"),
 		genConfigOption(configKeyAllowPublicBind, "allow", true),
+		genConfigOption(configKeyAllowUnsafeFilePaths, "allow unsafe files", false),
 	)
 	server := newServer(module, "0.0.0.0", 0)
 	if err := server.checkBindAllowed(); err != nil {
@@ -529,6 +532,63 @@ def handler(req):
 		}
 		if !strings.Contains(rec.Body.String(), "read:5") {
 			t.Errorf("within cap: body = %q, want the 5-byte body read", rec.Body.String())
+		}
+	})
+}
+
+// TestServableFilePathConfinement verifies file_response/send_file (and a
+// directly-set Response.file_path) are confined to the working directory by
+// default: a real file under it serves, an absolute host path or a traversal
+// outside it 404s instead of leaking the file, and allow_unsafe_file_paths
+// restores unrestricted serving.
+func TestServableFilePathConfinement(t *testing.T) {
+	// A real file that lives under the working directory (the repo dir at test time).
+	inRoot := "go.mod"
+	// A real file OUTSIDE the working directory.
+	outside := filepath.Join(t.TempDir(), "secret.txt")
+	if err := os.WriteFile(outside, []byte("TOP-SECRET"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	serve := func(srv *Server, path string) *httptest.ResponseRecorder {
+		c, rec := newGinContextForTest(http.MethodGet, "/f")
+		srv.applyResponse(c, &Response{StatusCode: 200, Headers: map[string]string{}, FilePath: path})
+		return rec
+	}
+
+	t.Run("in_root_served", func(t *testing.T) {
+		rec := serve(newServer(NewModule(), "localhost", 0), inRoot)
+		if rec.Code != 200 {
+			t.Fatalf("in-root file: status = %d, want 200", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "github.com/starpkg/web") {
+			t.Errorf("in-root file was not served: %q", rec.Body.String())
+		}
+	})
+
+	t.Run("absolute_outside_root_404", func(t *testing.T) {
+		rec := serve(newServer(NewModule(), "localhost", 0), outside)
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("outside file: status = %d, want 404", rec.Code)
+		}
+		if strings.Contains(rec.Body.String(), "TOP-SECRET") {
+			t.Error("outside file content leaked through file_response")
+		}
+	})
+
+	t.Run("traversal_404", func(t *testing.T) {
+		rec := serve(newServer(NewModule(), "localhost", 0), "../../../../../../etc/hostname")
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("traversal: status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("opt_out_serves_outside", func(t *testing.T) {
+		srv := newServer(NewModule(), "localhost", 0)
+		srv.allowUnsafeFilePaths = true
+		rec := serve(srv, outside)
+		if rec.Code != 200 || !strings.Contains(rec.Body.String(), "TOP-SECRET") {
+			t.Errorf("opt-out: status = %d body = %q, want 200 serving the file", rec.Code, rec.Body.String())
 		}
 	})
 }

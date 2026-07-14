@@ -6,7 +6,10 @@ import (
 	"fmt"
 	"net"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -38,23 +41,24 @@ func (m *Middleware) MatchesPath(path string) bool {
 
 // Server represents an HTTP server instance
 type Server struct {
-	host               string
-	port               int
-	engine             *gin.Engine
-	httpServer         *http.Server
-	running            bool
-	startErr           error   // Captures a failed ListenAndServe from Start()'s goroutine
-	module             *Module // Reference to module for config access
-	readTimeout        time.Duration
-	writeTimeout       time.Duration
-	maxBodySize        int64
-	serverHeader       string
-	allowPublicBind    bool          // When false, refuse to bind to a non-loopback address
-	middleware         []*Middleware // All middleware with path patterns
-	errorHandlers      *ErrorHandlerRegistry
-	ginMiddlewareAdded bool           // Flag to prevent multiple Gin middleware additions
-	staticMounts       []*staticMount // Read-only static-file roots, served as a NoRoute fallback
-	mu                 sync.RWMutex   // Protects running, httpServer, staticMounts fields
+	host                 string
+	port                 int
+	engine               *gin.Engine
+	httpServer           *http.Server
+	running              bool
+	startErr             error   // Captures a failed ListenAndServe from Start()'s goroutine
+	module               *Module // Reference to module for config access
+	readTimeout          time.Duration
+	writeTimeout         time.Duration
+	maxBodySize          int64
+	serverHeader         string
+	allowPublicBind      bool          // When false, refuse to bind to a non-loopback address
+	allowUnsafeFilePaths bool          // When false, confine file_response/send_file to the working directory
+	middleware           []*Middleware // All middleware with path patterns
+	errorHandlers        *ErrorHandlerRegistry
+	ginMiddlewareAdded   bool           // Flag to prevent multiple Gin middleware additions
+	staticMounts         []*staticMount // Read-only static-file roots, served as a NoRoute fallback
+	mu                   sync.RWMutex   // Protects running, httpServer, staticMounts fields
 }
 
 // newServer creates a new Server instance with module configuration
@@ -72,6 +76,7 @@ func newServer(module *Module, host string, port int) *Server {
 	debugMode := module.ext.GetBool(configKeyDebugMode)
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 	allowPublicBind := module.ext.GetBool(configKeyAllowPublicBind)
+	allowUnsafeFilePaths := module.ext.GetBool(configKeyAllowUnsafeFilePaths)
 
 	// Set gin mode - ensure release mode by default to avoid debug output
 	if debugMode {
@@ -92,20 +97,21 @@ func newServer(module *Module, host string, port int) *Server {
 
 	// Create server instance first
 	server := &Server{
-		host:               host,
-		port:               port,
-		engine:             engine,
-		httpServer:         nil,
-		running:            false,
-		module:             module,
-		readTimeout:        readTimeout,
-		writeTimeout:       writeTimeout,
-		maxBodySize:        maxBodySize,
-		serverHeader:       serverHeader,
-		allowPublicBind:    allowPublicBind,
-		middleware:         make([]*Middleware, 0),
-		errorHandlers:      NewErrorHandlerRegistry(),
-		ginMiddlewareAdded: false,
+		host:                 host,
+		port:                 port,
+		engine:               engine,
+		httpServer:           nil,
+		running:              false,
+		module:               module,
+		readTimeout:          readTimeout,
+		writeTimeout:         writeTimeout,
+		maxBodySize:          maxBodySize,
+		serverHeader:         serverHeader,
+		allowPublicBind:      allowPublicBind,
+		allowUnsafeFilePaths: allowUnsafeFilePaths,
+		middleware:           make([]*Middleware, 0),
+		errorHandlers:        NewErrorHandlerRegistry(),
+		ginMiddlewareAdded:   false,
 	}
 
 	// Now configure NoRoute and NoMethod handlers with access to server
@@ -427,9 +433,13 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 				c.Writer.Header().Add("Set-Cookie", cookie)
 			}
 
-			// Handle file response
+			// Handle file response (confined unless allow_unsafe_file_paths is set)
 			if customResponse.FilePath != "" {
-				c.File(customResponse.FilePath)
+				if servable, ok := s.servableFilePath(customResponse.FilePath); ok {
+					c.File(servable)
+				} else {
+					sendNotFound(c, "File not found")
+				}
 				return
 			}
 
@@ -456,9 +466,13 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 		c.Writer.Header().Add("Set-Cookie", cookie)
 	}
 
-	// Handle file response
+	// Handle file response (confined unless allow_unsafe_file_paths is set)
 	if response.FilePath != "" {
-		c.File(response.FilePath)
+		if servable, ok := s.servableFilePath(response.FilePath); ok {
+			c.File(servable)
+		} else {
+			sendNotFound(c, "File not found")
+		}
 		return
 	}
 
@@ -470,6 +484,39 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 	// Handle regular response
 	c.Data(response.StatusCode, contentType, []byte(response.Body))
+}
+
+// servableFilePath validates a path a script asked to serve (via
+// file_response / send_file / a directly-set Response.file_path) before it
+// reaches http.ServeFile. Unless allow_unsafe_file_paths is set, the path must
+// resolve to a real file under the process working directory; a path that
+// escapes it — a traversal, an absolute host path like /etc/passwd, or a
+// symlink pointing out — is refused, so an untrusted script cannot read
+// arbitrary host files or echo a request parameter straight into a file read.
+// (Static mounts have their own, separate confinement in static.go.) It returns
+// the path to serve and true when serving is allowed.
+func (s *Server) servableFilePath(p string) (string, bool) {
+	if s.allowUnsafeFilePaths {
+		return p, true // opt-out: unrestricted serving (historical behavior)
+	}
+	if strings.TrimSpace(p) == "" {
+		return "", false
+	}
+	root, err := os.Getwd()
+	if err != nil {
+		return "", false
+	}
+	realRoot := root
+	if rr, err := filepath.EvalSymlinks(root); err == nil {
+		realRoot = rr
+	}
+	// EvalSymlinks also rejects a non-existent / dangling target, which is not
+	// servable anyway; a real path is then checked to stay under the root.
+	real, err := filepath.EvalSymlinks(p)
+	if err != nil || !withinRoot(realRoot, real) {
+		return "", false
+	}
+	return p, true
 }
 
 // Server lifecycle methods
