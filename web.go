@@ -57,11 +57,13 @@ func NewModule() *Module {
 		genConfigOption(configKeyPort, "Default port to listen on", 8080),
 		genConfigOption(configKeyReadTimeout, "Read timeout in seconds", 30),
 		genConfigOption(configKeyWriteTimeout, "Write timeout in seconds", 30),
-		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)), // 32MB
+		// Host-only: a memory-DoS guard an untrusted script must not be able to raise/disable.
+		genConfigOption(configKeyMaxBodySize, "Maximum request body size in bytes", int64(32<<20)).SetHostOnly(true), // 32MB
 		genConfigOption(configKeyDebugMode, "Enable debug mode", false),
 		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 		genConfigOption(configKeyAllowPublicBind, "Allow binding to a non-loopback (public) address", false),
-		genConfigOption(configKeyAllowUnsafeFilePaths, "Allow file_response/send_file to serve paths outside the working directory", false),
+		// Host-only: a script must not be able to lift its own file-path confinement.
+		genConfigOption(configKeyAllowUnsafeFilePaths, "Allow file_response/send_file to serve paths outside the working directory", false).SetHostOnly(true),
 	)
 }
 

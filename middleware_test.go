@@ -76,13 +76,41 @@ func TestCORSMiddleware(t *testing.T) {
 		}
 	})
 
-	t.Run("wildcard_with_credentials_reflects_origin", func(t *testing.T) {
-		// "*" + credentials is illegal; the caller's origin is reflected, never "*".
+	t.Run("denied_origin_clears_downstream_allow_headers", func(t *testing.T) {
+		// A handler that set its own allow-origin for an unlisted origin must not
+		// slip past the policy: the middleware clears it on deny.
+		mw := corsMiddleware([]string{"https://a.test"}, nil, nil, false)
+		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://evil.test"}}
+		resp := mw(req, func(*Request) *Response {
+			return &Response{StatusCode: 200, Headers: map[string]string{
+				canonicalHeader(HeaderAccessControlAllowOrigin):      "https://evil.test",
+				canonicalHeader(HeaderAccessControlAllowCredentials): "true",
+			}}
+		})
+		if got, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; ok {
+			t.Errorf("downstream allow-origin = %q, want it cleared on deny", got)
+		}
+		if _, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)]; ok {
+			t.Error("downstream allow-credentials must be cleared on deny")
+		}
+	})
+
+	t.Run("wildcard_with_credentials_denied", func(t *testing.T) {
+		// "*" + credentials is illegal and reflecting an arbitrary origin with
+		// credentials is unsafe; only an explicit exact origin may be granted, so
+		// a wildcard-only config with credentials denies (no allow-origin).
 		mw := corsMiddleware([]string{"*"}, nil, nil, true)
 		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://c.test"}}
 		resp := mw(req, okNext("hi"))
-		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; got != "https://c.test" {
-			t.Errorf("allow-origin = %q, want the reflected origin (not *)", got)
+		if got, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; ok {
+			t.Errorf("allow-origin = %q, want it absent (wildcard+credentials denies)", got)
+		}
+		if _, ok := resp.Headers[canonicalHeader(HeaderAccessControlAllowCredentials)]; ok {
+			t.Error("allow-credentials must be absent when denied")
+		}
+		// Vary: Origin is set regardless, so a cache keys on Origin.
+		if got := resp.Headers[canonicalHeader(HeaderVary)]; !strings.Contains(got, "Origin") {
+			t.Errorf("Vary = %q, want it to include Origin even on deny", got)
 		}
 	})
 
@@ -102,7 +130,8 @@ func TestCORSMiddleware(t *testing.T) {
 	})
 
 	t.Run("normal_request_nil_headers_map", func(t *testing.T) {
-		mw := corsMiddleware([]string{"*"}, nil, nil, true)
+		// Explicit whitelist + credentials: the matching origin is granted.
+		mw := corsMiddleware([]string{"https://d.test"}, nil, nil, true)
 		req := &Request{Method: http.MethodGet, Path: "/", Headers: map[string]string{"Origin": "https://d.test"}}
 		// next returns a response with a nil Headers map; middleware must allocate it.
 		resp := mw(req, func(*Request) *Response {
@@ -112,7 +141,7 @@ func TestCORSMiddleware(t *testing.T) {
 			t.Errorf("credentials header not set on nil-headers response")
 		}
 		if got := resp.Headers[canonicalHeader(HeaderAccessControlAllowOrigin)]; got != "https://d.test" {
-			t.Errorf("allow-origin = %q, want the reflected origin", got)
+			t.Errorf("allow-origin = %q, want the whitelisted origin", got)
 		}
 	})
 }

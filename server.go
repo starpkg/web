@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -117,6 +118,24 @@ func newServer(module *Module, host string, port int) *Server {
 		errorHandlers:        NewErrorHandlerRegistry(),
 		ginMiddlewareAdded:   false,
 	}
+
+	// Bound every request body before any handler buffers it, so a chunked or
+	// unknown-length body cannot be read unboundedly into memory (OOM DoS). This
+	// ingress middleware runs ahead of route handlers, the custom-middleware
+	// chain, and the NoRoute/NoMethod paths — all of which read the body via
+	// createRequestFromGin. (A max of MaxInt64 is treated as unbounded to avoid
+	// MaxBytesReader's internal limit+1 overflow.)
+	engine.Use(func(c *gin.Context) {
+		if server.maxBodySize > 0 && server.maxBodySize < math.MaxInt64 {
+			if c.Request.ContentLength > server.maxBodySize {
+				server.applyResponse(c, createRequestEntityTooLargeResponse(server.maxBodySize))
+				c.Abort()
+				return
+			}
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, server.maxBodySize)
+		}
+		c.Next()
+	})
 
 	// Now configure NoRoute and NoMethod handlers with access to server
 	engine.NoMethod(func(c *gin.Context) {
@@ -311,24 +330,11 @@ func (s *Server) Route(methods interface{}, path string, handler starlark.Callab
 // converting HTTP requests to Starlark objects and handling response conversion.
 func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Bound the request body before it is buffered. The declared-length check
-		// is only a fast path: a chunked or unknown-length request reports
-		// ContentLength == -1, which the comparison below can never catch, so the
-		// body must be read through a MaxBytesReader that caps the stream itself.
-		// Without this an attacker streams an unbounded body and exhausts memory.
-		if s.maxBodySize > 0 {
-			if c.Request.ContentLength > s.maxBodySize {
-				s.applyResponse(c, createRequestEntityTooLargeResponse(s.maxBodySize))
-				return
-			}
-			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.maxBodySize)
-		}
-
-		// Create request object
+		// The request body is already bounded by the ingress middleware installed
+		// in newServer (which covers every body-reading path). Create the request
+		// object; if the body overran the cap while being buffered, reject it with
+		// a 413 before the handler runs rather than passing a truncated body.
 		req := s.createRequest(c)
-
-		// A body that overran the cap while being buffered is rejected with a 413
-		// before the handler runs, rather than passing a silently truncated body.
 		if req.bodyErr != nil {
 			var maxErr *http.MaxBytesError
 			if errors.As(req.bodyErr, &maxErr) {
@@ -439,9 +445,7 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 			// Handle file response (confined unless allow_unsafe_file_paths is set)
 			if customResponse.FilePath != "" {
-				if servable, ok := s.servableFilePath(customResponse.FilePath); ok {
-					c.File(servable)
-				} else {
+				if !s.serveConfinedFile(c, customResponse.FilePath) {
 					sendNotFound(c, "File not found")
 				}
 				return
@@ -472,9 +476,7 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 	// Handle file response (confined unless allow_unsafe_file_paths is set)
 	if response.FilePath != "" {
-		if servable, ok := s.servableFilePath(response.FilePath); ok {
-			c.File(servable)
-		} else {
+		if !s.serveConfinedFile(c, response.FilePath) {
 			sendNotFound(c, "File not found")
 		}
 		return
@@ -490,37 +492,54 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 	c.Data(response.StatusCode, contentType, []byte(response.Body))
 }
 
-// servableFilePath validates a path a script asked to serve (via
-// file_response / send_file / a directly-set Response.file_path) before it
-// reaches http.ServeFile. Unless allow_unsafe_file_paths is set, the path must
-// resolve to a real file under the process working directory; a path that
-// escapes it — a traversal, an absolute host path like /etc/passwd, or a
-// symlink pointing out — is refused, so an untrusted script cannot read
-// arbitrary host files or echo a request parameter straight into a file read.
-// (Static mounts have their own, separate confinement in static.go.) It returns
-// the path to serve and true when serving is allowed.
-func (s *Server) servableFilePath(p string) (string, bool) {
+// serveConfinedFile serves a path a script asked to return (via file_response /
+// send_file / a directly-set Response.file_path). Unless allow_unsafe_file_paths
+// is set, it opens the file first and then validates the open descriptor: it
+// must be a regular file — never a directory, which http.ServeFile would turn
+// into an index page or listing, nor a FIFO/device that could block — whose real
+// path stays under the process working directory. It is then served from that
+// same descriptor, which narrows the check-to-serve TOCTOU window and stops an
+// untrusted script from reading arbitrary host files or echoing a request
+// parameter straight into a file read. (Static mounts have their own confinement
+// in static.go.) Returns true when it wrote a response.
+func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 	if s.allowUnsafeFilePaths {
-		return p, true // opt-out: unrestricted serving (historical behavior)
+		c.File(p) // opt-out: unrestricted serving (historical behavior)
+		return true
 	}
 	if strings.TrimSpace(p) == "" {
-		return "", false
+		return false
+	}
+	abs, err := filepath.Abs(p)
+	if err != nil {
+		return false
+	}
+	f, err := os.Open(abs)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	fi, err := f.Stat()
+	if err != nil || !fi.Mode().IsRegular() {
+		return false
+	}
+	real, err := filepath.EvalSymlinks(abs)
+	if err != nil {
+		return false
 	}
 	root, err := os.Getwd()
 	if err != nil {
-		return "", false
+		return false
 	}
-	realRoot := root
-	if rr, err := filepath.EvalSymlinks(root); err == nil {
-		realRoot = rr
+	realRoot, err := filepath.EvalSymlinks(root)
+	if err != nil {
+		realRoot = root
 	}
-	// EvalSymlinks also rejects a non-existent / dangling target, which is not
-	// servable anyway; a real path is then checked to stay under the root.
-	real, err := filepath.EvalSymlinks(p)
-	if err != nil || !withinRoot(realRoot, real) {
-		return "", false
+	if !withinRoot(realRoot, real) {
+		return false
 	}
-	return p, true
+	http.ServeContent(c.Writer, c.Request, fi.Name(), fi.ModTime(), f)
+	return true
 }
 
 // Server lifecycle methods

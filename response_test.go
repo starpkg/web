@@ -692,6 +692,29 @@ func TestSetCookieAttributeInjection(t *testing.T) {
 	}
 }
 
+// TestDeleteCookieAttributeInjection verifies delete_cookie also serializes
+// through net/http, so a path/domain cannot inject attributes that widen or
+// redirect the deletion's scope.
+func TestDeleteCookieAttributeInjection(t *testing.T) {
+	rw := NewResponseWrapper(&Response{})
+	b := starlark.NewBuiltin("delete_cookie", rw.deleteCookieMethod)
+	if _, err := rw.deleteCookieMethod(&starlark.Thread{}, b,
+		starlark.Tuple{starlark.String("sid")},
+		[]starlark.Tuple{{starlark.String("path"), starlark.String("/; Domain=evil.com")}}); err != nil {
+		t.Fatalf("delete_cookie: %v", err)
+	}
+	c := rw.response.Cookies[0]
+	resp := &http.Response{Header: http.Header{"Set-Cookie": []string{c}}}
+	parsed := resp.Cookies()
+	if len(parsed) != 1 || parsed[0].Domain != "" {
+		t.Errorf("path injected an attribute: %q -> %+v", c, parsed)
+	}
+	// It must still expire the cookie (Max-Age=0).
+	if !strings.Contains(c, "Max-Age=0") {
+		t.Errorf("delete_cookie must emit Max-Age=0, got %q", c)
+	}
+}
+
 // --- cookies -----------------------------------------------------------------
 
 // Two set_cookie calls must accumulate two distinct cookies (Set-Cookie is not

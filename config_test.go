@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/starpkg/base"
+	"go.starlark.net/starlark"
 )
 
 // TestConfigurationUsage tests that module configurations are properly used
@@ -200,5 +201,34 @@ func TestServerTimeoutConfiguration(t *testing.T) {
 	err = server.Stop()
 	if err != nil {
 		t.Errorf("Failed to stop server: %v", err)
+	}
+}
+
+// TestHostOnlyConfigOptions verifies the DoS/confinement levers are host-only:
+// an untrusted script must NOT be able to raise the body-size cap or lift the
+// file-path confinement, so no set_ builtin is generated for them (get_ remains).
+func TestHostOnlyConfigOptions(t *testing.T) {
+	dict, err := NewModule().LoadModule()()
+	if err != nil {
+		t.Fatalf("LoadModule: %v", err)
+	}
+	mod, ok := dict[ModuleName].(starlark.HasAttrs)
+	if !ok {
+		t.Fatalf("module %q is not attr-accessible: %T", ModuleName, dict[ModuleName])
+	}
+	attrs := make(map[string]bool)
+	for _, n := range mod.AttrNames() {
+		attrs[n] = true
+	}
+	for _, name := range []string{"set_max_body_size", "set_allow_unsafe_file_paths"} {
+		if attrs[name] {
+			t.Errorf("%s must not be script-settable (host-only)", name)
+		}
+	}
+	// A normal option keeps its set_ builtin, and host-only options still expose get_.
+	for _, name := range []string{"set_server_header", "get_max_body_size", "get_allow_unsafe_file_paths"} {
+		if !attrs[name] {
+			t.Errorf("%s builtin should be present", name)
+		}
 	}
 }

@@ -2,6 +2,7 @@ package web
 
 import (
 	"fmt"
+	"math"
 	"net/http"
 
 	"go.starlark.net/starlark"
@@ -181,7 +182,18 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 	if maxAge != starlark.None {
 		if maxAgeInt, ok := maxAge.(starlark.Int); ok {
 			if age, ok := maxAgeInt.Int64(); ok {
-				ck.MaxAge = int(age)
+				// http.Cookie treats MaxAge 0 as "omit the attribute", so an
+				// explicit non-positive max_age (expire now) maps to a negative
+				// value, which emits "Max-Age=0". Clamp so int(age) cannot
+				// overflow a 32-bit int.
+				switch {
+				case age <= 0:
+					ck.MaxAge = -1
+				case age > math.MaxInt32:
+					ck.MaxAge = math.MaxInt32
+				default:
+					ck.MaxAge = int(age)
+				}
 			}
 		}
 	}
@@ -212,10 +224,18 @@ func (rw *ResponseWrapper) deleteCookieMethod(thread *starlark.Thread, b *starla
 		return nil, err
 	}
 
-	cookie := fmt.Sprintf("%s=; Path=%s; Max-Age=0", name, string(path))
-
-	if string(domain) != "" {
-		cookie += fmt.Sprintf("; Domain=%s", string(domain))
+	// Serialize through net/http (MaxAge -1 emits "Max-Age=0", expiring the
+	// cookie) so the name/path/domain cannot inject extra attributes and alter
+	// the deletion's scope.
+	ck := &http.Cookie{
+		Name:   name,
+		Path:   string(path),
+		Domain: string(domain),
+		MaxAge: -1,
+	}
+	cookie := ck.String()
+	if cookie == "" {
+		return nil, fmt.Errorf("delete_cookie: invalid cookie name %q", name)
 	}
 
 	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.

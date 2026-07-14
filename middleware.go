@@ -130,7 +130,7 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 
 	return func(req *Request, next NextFunc) *Response {
 		reqOrigin := req.Headers["Origin"]
-		allowOrigin, vary := corsAllowOrigin(origins, reqOrigin, credentials)
+		allowOrigin := corsAllowOrigin(origins, reqOrigin, credentials)
 
 		// Handle preflight requests
 		if req.Method == http.MethodOptions {
@@ -138,7 +138,7 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 				canonicalHeader(HeaderAccessControlAllowMethods): strings.Join(methods, ", "),
 				canonicalHeader(HeaderAccessControlAllowHeaders): strings.Join(headers, ", "),
 			}
-			applyCORSOrigin(h, allowOrigin, vary, credentials)
+			applyCORSOrigin(h, allowOrigin, credentials)
 			return &Response{StatusCode: 204, Headers: h, Body: ""}
 		}
 
@@ -147,60 +147,78 @@ func corsMiddleware(origins []string, methods []string, headers []string, creden
 		if response.Headers == nil {
 			response.Headers = make(map[string]string)
 		}
-		applyCORSOrigin(response.Headers, allowOrigin, vary, credentials)
+		applyCORSOrigin(response.Headers, allowOrigin, credentials)
 		return response
 	}
 }
 
 // corsAllowOrigin decides the single Access-Control-Allow-Origin value for a
 // request. A configured exact origin is echoed back — never a comma-joined list,
-// which is an illegal header that silently disables the whitelist. "*" is
-// honored only without credentials; with credentials the caller's origin is
-// reflected instead, since the spec forbids "*" together with
-// Access-Control-Allow-Credentials. vary reports whether the answer depends on
-// the request Origin (so a Vary: Origin must accompany it).
-func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) (origin string, vary bool) {
-	wildcard := false
-	for _, o := range allowed {
-		if o == "*" {
-			wildcard = true
-			continue
-		}
-		if reqOrigin != "" && o == reqOrigin {
-			return reqOrigin, true
-		}
-	}
-	if wildcard {
-		if credentials {
-			if reqOrigin != "" {
-				return reqOrigin, true
+// which is an illegal header that silently disables the whitelist. "*" is honored
+// ONLY without credentials: the spec forbids "*" alongside
+// Access-Control-Allow-Credentials, and reflecting an arbitrary origin with
+// credentials would grant every site credentialed access, so with credentials
+// only an explicit exact origin is allowed. Returns "" when the origin is denied.
+func corsAllowOrigin(allowed []string, reqOrigin string, credentials bool) string {
+	if reqOrigin != "" {
+		for _, o := range allowed {
+			if o == reqOrigin {
+				return reqOrigin
 			}
-			return "", false
 		}
-		return "*", false
 	}
-	return "", false
+	if !credentials {
+		for _, o := range allowed {
+			if o == "*" {
+				return "*"
+			}
+		}
+	}
+	return ""
 }
 
-// applyCORSOrigin writes the resolved allow-origin (if any), a Vary: Origin when
-// the decision depends on the request Origin, and the credentials header only
-// when credentials are enabled and an origin was granted.
-func applyCORSOrigin(h map[string]string, allowOrigin string, vary, credentials bool) {
-	if allowOrigin != "" {
-		h[canonicalHeader(HeaderAccessControlAllowOrigin)] = allowOrigin
+// applyCORSOrigin writes the CORS decision. It always adds Vary: Origin (the
+// response is origin-dependent, so a shared cache must key on Origin whether or
+// not the origin was granted), clears any allow-origin/credentials a downstream
+// handler may have set (so an unlisted origin cannot be authorized past this
+// policy), and sets the credentials header only when credentials are enabled and
+// an origin was granted.
+func applyCORSOrigin(h map[string]string, allowOrigin string, credentials bool) {
+	addVaryToken(h, "Origin")
+	acao := canonicalHeader(HeaderAccessControlAllowOrigin)
+	acac := canonicalHeader(HeaderAccessControlAllowCredentials)
+	if allowOrigin == "" {
+		delete(h, acao)
+		delete(h, acac)
+		return
 	}
-	if vary {
-		key := canonicalHeader(HeaderVary)
-		switch existing := h[key]; {
-		case existing == "":
-			h[key] = "Origin"
-		case !strings.Contains(existing, "Origin"):
-			h[key] = existing + ", Origin"
+	h[acao] = allowOrigin
+	if credentials {
+		h[acac] = "true"
+	} else {
+		delete(h, acac)
+	}
+}
+
+// addVaryToken adds token to the Vary header, treating the existing value as a
+// case-insensitive comma-separated token list and leaving a wildcard (Vary: *)
+// untouched.
+func addVaryToken(h map[string]string, token string) {
+	key := canonicalHeader(HeaderVary)
+	existing := h[key]
+	if existing == "" {
+		h[key] = token
+		return
+	}
+	if strings.TrimSpace(existing) == "*" {
+		return
+	}
+	for _, t := range strings.Split(existing, ",") {
+		if strings.EqualFold(strings.TrimSpace(t), token) {
+			return
 		}
 	}
-	if credentials && allowOrigin != "" {
-		h[canonicalHeader(HeaderAccessControlAllowCredentials)] = "true"
-	}
+	h[key] = existing + ", " + token
 }
 
 // loggingMiddleware creates a logging middleware
@@ -386,7 +404,7 @@ func compressionMiddleware(level int, minSize int, types []string) MiddlewareFun
 			response.Headers = make(map[string]string)
 		}
 		response.Headers[canonicalHeader(HeaderContentEncoding)] = "gzip"
-		response.Headers[canonicalHeader(HeaderVary)] = "Accept-Encoding"
+		addVaryToken(response.Headers, "Accept-Encoding") // merge, don't clobber a CORS Vary: Origin
 		response.Headers[canonicalHeader(HeaderContentLength)] = strconv.Itoa(buf.Len())
 		response.Body = buf.String()
 
@@ -572,8 +590,8 @@ func cacheMiddleware(maxAge int, private bool, patterns []string, vary []string)
 		}
 		response.Headers[canonicalHeader(HeaderCacheControl)] = cacheControl
 
-		if len(vary) > 0 {
-			response.Headers[canonicalHeader(HeaderVary)] = strings.Join(vary, ", ")
+		for _, v := range vary {
+			addVaryToken(response.Headers, v) // merge each token, preserving any existing Vary (e.g. CORS Origin)
 		}
 
 		return response

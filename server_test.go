@@ -494,39 +494,42 @@ def handler(req):
 		return globals["handler"].(starlark.Callable)
 	}
 
+	// Drive the full engine so the ingress body-cap middleware (installed in
+	// newServer) runs — it, not wrapHandler, is what bounds the body.
 	newSrv := func(cap int64) *Server {
 		srv := newServer(m, "localhost", 0)
 		srv.maxBodySize = cap
+		if err := srv.addRoute(MethodPost, "/upload", echoLen()); err != nil {
+			t.Fatal(err)
+		}
 		return srv
+	}
+	send := func(srv *Server, body string, contentLength int64) *httptest.ResponseRecorder {
+		req := httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(body))
+		req.ContentLength = contentLength
+		rec := httptest.NewRecorder()
+		srv.engine.ServeHTTP(rec, req)
+		return rec
 	}
 
 	t.Run("declared_oversize_rejected_413", func(t *testing.T) {
-		srv := newSrv(16)
-		c, rec := newGinContextForTest(http.MethodPost, "/upload")
-		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("A", 1024)))
-		srv.wrapHandler(echoLen())(c)
+		rec := send(newSrv(16), strings.Repeat("A", 1024), 1024)
 		if rec.Code != http.StatusRequestEntityTooLarge {
 			t.Errorf("declared oversize: status = %d, want 413", rec.Code)
 		}
 	})
 
 	t.Run("chunked_unknown_length_rejected_413", func(t *testing.T) {
-		srv := newSrv(16)
-		c, rec := newGinContextForTest(http.MethodPost, "/upload")
-		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("A", 1024)))
-		c.Request.ContentLength = -1 // chunked / unknown length: the fast-path check is blind to this
-		srv.wrapHandler(echoLen())(c)
+		// ContentLength -1 (chunked / unknown length): the declared-length check
+		// is blind to this, so only the MaxBytesReader stream cap stops it.
+		rec := send(newSrv(16), strings.Repeat("A", 1024), -1)
 		if rec.Code != http.StatusRequestEntityTooLarge {
 			t.Errorf("chunked oversize: status = %d, want 413 (unbounded read otherwise)", rec.Code)
 		}
 	})
 
 	t.Run("within_cap_still_served", func(t *testing.T) {
-		srv := newSrv(1024)
-		c, rec := newGinContextForTest(http.MethodPost, "/upload")
-		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("hello"))
-		c.Request.ContentLength = -1
-		srv.wrapHandler(echoLen())(c)
+		rec := send(newSrv(1024), "hello", -1)
 		if rec.Code != 200 {
 			t.Fatalf("within cap: status = %d, want 200", rec.Code)
 		}
@@ -580,6 +583,15 @@ func TestServableFilePathConfinement(t *testing.T) {
 		rec := serve(newServer(NewModule(), "localhost", 0), "../../../../../../etc/hostname")
 		if rec.Code != http.StatusNotFound {
 			t.Errorf("traversal: status = %d, want 404", rec.Code)
+		}
+	})
+
+	t.Run("directory_404", func(t *testing.T) {
+		// A directory under the root must not be served (http.ServeFile would turn
+		// it into an index page or listing); only regular files serve.
+		rec := serve(newServer(NewModule(), "localhost", 0), "docs")
+		if rec.Code != http.StatusNotFound {
+			t.Errorf("directory: status = %d, want 404", rec.Code)
 		}
 	})
 
