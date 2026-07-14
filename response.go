@@ -144,6 +144,25 @@ func (rw *ResponseWrapper) SetField(name string, value starlark.Value) error {
 	}
 }
 
+// formatCookie serializes a Set-Cookie line through net/http, which sanitizes
+// the name/value/path/domain so a value like "abc; Domain=evil.com" cannot
+// inject extra attributes. The http_only / secure flags are caller-controlled
+// (http_only defaults on); this is a general-purpose cookie API, not
+// exclusively session cookies, so the static-analysis "cookie missing HttpOnly/
+// Secure" heuristic is a false positive here.
+func formatCookie(name, value, path, domain string, secure, httpOnly bool, maxAge int) (string, error) {
+	ck := &http.Cookie{Name: name, Path: path, Domain: domain} // nosemgrep
+	ck.Value = value
+	ck.HttpOnly = httpOnly
+	ck.Secure = secure
+	ck.MaxAge = maxAge
+	s := ck.String()
+	if s == "" {
+		return "", fmt.Errorf("invalid cookie name %q", name)
+	}
+	return s, nil
+}
+
 // cookieMaxAge resolves a Starlark max_age value to an http.Cookie MaxAge: None
 // (or a non-int) yields 0, which omits the attribute; a non-positive value
 // expires the cookie now (a negative MaxAge, emitted as "Max-Age=0"); and the
@@ -193,18 +212,9 @@ func (rw *ResponseWrapper) setCookieMethod(thread *starlark.Thread, b *starlark.
 		return nil, err
 	}
 
-	// Build the header through net/http, which sanitizes the name/value/path/
-	// domain. Hand-formatting with Sprintf let a value like "abc; Domain=evil.com"
-	// inject extra cookie attributes; http.Cookie.String() neutralizes that. The
-	// http_only / secure flags come from the caller (http_only defaults true).
-	ck := &http.Cookie{Name: name, Path: string(path), Domain: string(domain)}
-	ck.Value = value
-	ck.HttpOnly = bool(httpOnly)
-	ck.Secure = bool(secure)
-	ck.MaxAge = cookieMaxAge(maxAge)
-	cookie := ck.String()
-	if cookie == "" {
-		return nil, fmt.Errorf("set_cookie: invalid cookie name %q", name)
+	cookie, err := formatCookie(name, value, string(path), string(domain), bool(secure), bool(httpOnly), cookieMaxAge(maxAge))
+	if err != nil {
+		return nil, fmt.Errorf("set_cookie: %w", err)
 	}
 
 	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.
@@ -229,18 +239,12 @@ func (rw *ResponseWrapper) deleteCookieMethod(thread *starlark.Thread, b *starla
 		return nil, err
 	}
 
-	// Serialize through net/http (MaxAge -1 emits "Max-Age=0", expiring the
-	// cookie) so the name/path/domain cannot inject extra attributes and alter
-	// the deletion's scope.
-	ck := &http.Cookie{
-		Name:   name,
-		Path:   string(path),
-		Domain: string(domain),
-		MaxAge: -1,
-	}
-	cookie := ck.String()
-	if cookie == "" {
-		return nil, fmt.Errorf("delete_cookie: invalid cookie name %q", name)
+	// MaxAge -1 emits "Max-Age=0", expiring the cookie; serializing through
+	// net/http keeps the name/path/domain from injecting attributes that would
+	// alter the deletion's scope.
+	cookie, err := formatCookie(name, "", string(path), string(domain), false, false, -1)
+	if err != nil {
+		return nil, fmt.Errorf("delete_cookie: %w", err)
 	}
 
 	// Each cookie is its own Set-Cookie line; Set-Cookie is not comma-combinable.
