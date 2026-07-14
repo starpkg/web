@@ -6,7 +6,6 @@ package web
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/1set/starlet"
 	"github.com/1set/starlet/dataconv"
@@ -67,12 +66,10 @@ func NewModule() *Module {
 
 // Helper functions
 
-// genConfigOption creates a configuration option with common settings
+// genConfigOption creates a configuration option with common settings, deriving
+// the conventional WEB_<NAME> environment variable via base's shared helper.
 func genConfigOption[T any](name, description string, defaultValue T) *base.ConfigOption[T] {
-	return base.NewConfigOption(defaultValue).
-		WithName(name).
-		WithDescription(description).
-		WithEnvVar(strings.ToUpper(ModuleName + "_" + name))
+	return base.NewNamedConfigOption(ModuleName, name, description, defaultValue)
 }
 
 // newModuleWithOptions creates a Module with the given configuration options
