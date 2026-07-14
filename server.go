@@ -2,6 +2,7 @@ package web
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net"
 	"net/http"
@@ -300,14 +301,31 @@ func (s *Server) Route(methods interface{}, path string, handler starlark.Callab
 // converting HTTP requests to Starlark objects and handling response conversion.
 func (s *Server) wrapHandler(handler starlark.Callable) gin.HandlerFunc {
 	return func(c *gin.Context) {
-		// Check request body size if configured
-		if s.maxBodySize > 0 && c.Request.ContentLength > s.maxBodySize {
-			sendBadRequest(c, "Request body too large")
-			return
+		// Bound the request body before it is buffered. The declared-length check
+		// is only a fast path: a chunked or unknown-length request reports
+		// ContentLength == -1, which the comparison below can never catch, so the
+		// body must be read through a MaxBytesReader that caps the stream itself.
+		// Without this an attacker streams an unbounded body and exhausts memory.
+		if s.maxBodySize > 0 {
+			if c.Request.ContentLength > s.maxBodySize {
+				s.applyResponse(c, createRequestEntityTooLargeResponse(s.maxBodySize))
+				return
+			}
+			c.Request.Body = http.MaxBytesReader(c.Writer, c.Request.Body, s.maxBodySize)
 		}
 
 		// Create request object
 		req := s.createRequest(c)
+
+		// A body that overran the cap while being buffered is rejected with a 413
+		// before the handler runs, rather than passing a silently truncated body.
+		if req.bodyErr != nil {
+			var maxErr *http.MaxBytesError
+			if errors.As(req.bodyErr, &maxErr) {
+				s.applyResponse(c, createRequestEntityTooLargeResponse(s.maxBodySize))
+				return
+			}
+		}
 
 		// Create the final handler function
 		finalHandler := func(req *Request) *Response {

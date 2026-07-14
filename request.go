@@ -34,6 +34,7 @@ type Request struct {
 	Context  map[string]interface{} `json:"context"`
 	ginCtx   *gin.Context           // Internal gin context
 	bodyData []byte                 // Cached body data for multiple reads
+	bodyErr  error                  // Error from reading the body (e.g. it overran the size cap)
 }
 
 // createRequestFromGin creates a Request from a gin.Context.
@@ -59,8 +60,9 @@ func createRequestFromGin(c *gin.Context) *Request {
 	// Create context map for middleware data
 	context := make(map[string]interface{})
 
-	// Cache body data for multiple reads
-	bodyData, _ := c.GetRawData()
+	// Cache body data for multiple reads. The error is retained (not discarded)
+	// so the caller can reject a body that overran a MaxBytesReader cap.
+	bodyData, bodyErr := c.GetRawData()
 
 	return &Request{
 		Method:   c.Request.Method,
@@ -75,6 +77,7 @@ func createRequestFromGin(c *gin.Context) *Request {
 		Context:  context,
 		ginCtx:   c,
 		bodyData: bodyData,
+		bodyErr:  bodyErr,
 	}
 }
 

@@ -472,6 +472,67 @@ def handler(req):
 	})
 }
 
+// TestWrapHandlerBodyCap verifies the request body is bounded before buffering,
+// so a chunked / unknown-length body cannot be read unboundedly into memory
+// (OOM DoS). A declared over-length body is rejected on the fast path; a
+// streamed body that overruns the cap is rejected once MaxBytesReader trips.
+func TestWrapHandlerBodyCap(t *testing.T) {
+	m := NewModule()
+	echoLen := func() starlark.Callable {
+		src := `
+def handler(req):
+    return response("read:" + str(len(req.body())))
+`
+		predeclared := starlark.StringDict{"response": starlark.NewBuiltin("response", m.response)}
+		globals, err := starlark.ExecFile(&starlark.Thread{}, "h.star", src, predeclared)
+		if err != nil {
+			t.Fatalf("ExecFile: %v", err)
+		}
+		return globals["handler"].(starlark.Callable)
+	}
+
+	newSrv := func(cap int64) *Server {
+		srv := newServer(m, "localhost", 0)
+		srv.maxBodySize = cap
+		return srv
+	}
+
+	t.Run("declared_oversize_rejected_413", func(t *testing.T) {
+		srv := newSrv(16)
+		c, rec := newGinContextForTest(http.MethodPost, "/upload")
+		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("A", 1024)))
+		srv.wrapHandler(echoLen())(c)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("declared oversize: status = %d, want 413", rec.Code)
+		}
+	})
+
+	t.Run("chunked_unknown_length_rejected_413", func(t *testing.T) {
+		srv := newSrv(16)
+		c, rec := newGinContextForTest(http.MethodPost, "/upload")
+		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader(strings.Repeat("A", 1024)))
+		c.Request.ContentLength = -1 // chunked / unknown length: the fast-path check is blind to this
+		srv.wrapHandler(echoLen())(c)
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("chunked oversize: status = %d, want 413 (unbounded read otherwise)", rec.Code)
+		}
+	})
+
+	t.Run("within_cap_still_served", func(t *testing.T) {
+		srv := newSrv(1024)
+		c, rec := newGinContextForTest(http.MethodPost, "/upload")
+		c.Request = httptest.NewRequest(http.MethodPost, "/upload", strings.NewReader("hello"))
+		c.Request.ContentLength = -1
+		srv.wrapHandler(echoLen())(c)
+		if rec.Code != 200 {
+			t.Fatalf("within cap: status = %d, want 200", rec.Code)
+		}
+		if !strings.Contains(rec.Body.String(), "read:5") {
+			t.Errorf("within cap: body = %q, want the 5-byte body read", rec.Body.String())
+		}
+	})
+}
+
 // applyResponse must serve a file when FilePath is set, and route a >=400
 // status through a registered error handler.
 func TestApplyResponseErrorHandlerRouting(t *testing.T) {
