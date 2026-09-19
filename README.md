@@ -140,3 +140,7 @@ option table, defaults, accessors, and the bind-guardrail details.
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Go compatibility
+
+Go 1.26.8 or newer is required. Release builds use Go 1.27.1. This patch updates the interpreter and the reviewed networking/Unicode security dependencies.
