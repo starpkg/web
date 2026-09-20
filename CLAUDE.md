@@ -35,13 +35,13 @@ gofmt -l . && go vet ./...                 # must be clean before commit
 go run github.com/1set/meta/doccov@master .  # doc-coverage gate (exit 0 required)
 ```
 
-**Verify on the go floor in Docker** — this repo's floor is **go 1.26.8** (see
+**Verify on the go floor in Docker** — this repo's floor is **go 1.25.0** (see
 Release discipline), and the pinned `go.starlark.net` baseline uses
 `maphash.String` (needs ≥1.19), so behavior on the floor must be checked in a
 container, not just on the (newer) local toolchain:
 
 ```bash
-docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src golang:1.26.8 go test -race -count=1 ./...
+docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src golang:1.25.0 go test -race -count=1 ./...
 ```
 
 Integration scripts under `../test/web/*.star` live in the **private
@@ -165,7 +165,7 @@ Three layers must stay in sync (enforced by the doc standard,
 
 ## Release discipline
 
-- **Floor = go 1.26.8**, required by the reviewed networking dependencies and current Go security patch. The interpreter is pinned to its minimum parser-depth fix (`5395d018f003`).
-- **CI matrix** = `[1.26.x, 1.27.x]` via the pinned reusable workflow in `1set/meta`.
+- **Floor = go 1.25.0**, required by the reviewed networking and Unicode dependencies. The interpreter remains at `ffb3f39dd27a`; its known parser recursion limitation requires host-reviewed source or an external isolation boundary. Production builds use a supported patched Go toolchain.
+- **CI matrix** = `[1.25.x, 1.27.x]` via the pinned reusable workflow in `1set/meta`.
 - **Bumping the version, the go floor, or tagging are user-confirmed actions** —
   never tag autonomously; default to patch bumps; published tags are immutable.
