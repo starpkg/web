@@ -240,7 +240,10 @@ and `Content-Type` by extension all work without the script handling them; an
 
 **Parameters:**
 
-- `root` (string): The directory to serve. Must not be empty.
+- `root` (string): The directory to serve. Must not be empty. At mount time it
+  must exist and resolve to a directory under the working directory captured
+  when the server was created. The host-only `allow_unsafe_file_paths` option
+  permits an outside root; it does not disable confinement within that mount.
 - `index` (string or list of strings, optional): Directory default pages, tried
   in order (default: `["index.html", "index.htm"]`). An empty list disables
   index pages (directories then 404).
@@ -252,7 +255,10 @@ and `Content-Type` by extension all work without the script handling them; an
 
 **Returns:** A `web.StaticDir` handle (pass it to `srv.static`).
 
-**Safety (always on, no opt-out):**
+The mount is bound to the resolved physical root at registration. Later cwd
+changes or retargeting of the supplied symlink alias do not select a new root.
+
+**Safety within an accepted mount (always on, no opt-out):**
 
 - **No path traversal.** The request path is cleaned and anchored under `root`;
   `..` can never escape, and the resolved path is re-checked against the
@@ -644,7 +650,8 @@ explicit route registered on the server takes precedence. A request under
 
 - `prefix` (string): URL prefix to mount under (`/` serves the whole site).
 - `dir` (`web.StaticDir`): the handle returned by `static_dir(...)`.
-- **Returns:** `None`.
+- **Returns:** `None`. A missing, non-directory or unauthorized root raises an
+  error without registering the mount. Create the directory before mounting.
 
 ```python
 srv.static("/assets", static_dir("./public/assets", cache_control="max-age=3600"))
@@ -898,6 +905,11 @@ lives in the sandbox runtime layer; this is the module-local guardrail.
 
 ## Configuration
 
+The server captures the physical working directory at creation. Confined
+`file_response`, `send_file`, direct `file_path` assignments and custom error
+responses resolve relative paths against that fixed root. Changing cwd later
+does not widen this boundary.
+
 Each module configuration option is exposed to scripts as a pair of generated
 accessor builtins (loaded from the `web` module alongside the functions above):
 
@@ -932,7 +944,7 @@ them from Go configuration or the corresponding `WEB_*` environment variable.
 | `debug_mode` | `get_debug_mode` | `set_debug_mode` | bool | `WEB_DEBUG_MODE` | `false` | Enable Gin debug logging |
 | `server_header` | `get_server_header` | `set_server_header` | string | `WEB_SERVER_HEADER` | `Starlark-Web/1.0` | Custom `Server` header value |
 | `allow_public_bind` | `get_allow_public_bind` | `set_allow_public_bind` | bool | `WEB_ALLOW_PUBLIC_BIND` | `false` | Allow binding to a non-loopback (public) address |
-| `allow_unsafe_file_paths` | `get_allow_unsafe_file_paths` | _(host-only)_ | bool | `WEB_ALLOW_UNSAFE_FILE_PATHS` | `false` | Allow `file_response`/`send_file` to serve paths outside the working directory |
+| `allow_unsafe_file_paths` | `get_allow_unsafe_file_paths` | _(host-only)_ | bool | `WEB_ALLOW_UNSAFE_FILE_PATHS` | `false` | Allow file responses and static mounts outside the server's captured working directory |
 
 **Example:**
 

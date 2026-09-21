@@ -87,10 +87,10 @@ Module builtins (`load("web", …)`):
 - `json_response(data, status?, headers?)` — JSON response.
 - `html_response(content, status?, headers?)` — HTML response.
 - `text_response(text, status?)` — plain-text response.
-- `file_response(filepath, content_type?, filename?)` — serve a file (optionally as a download). Confined to the working directory by default; set `allow_unsafe_file_paths` to serve outside it.
+- `file_response(filepath, content_type?, filename?)` — serve a file (optionally as a download). Confined to the working directory captured when the server is created; set `allow_unsafe_file_paths` to serve outside it.
 - `send_file(filepath, content_type?)` — serve a file (same working-directory confinement as `file_response`).
 - `send_data(data, filename, content_type?)` — send in-memory data as a download.
-- `static_dir(root, index?, spa?, cache_control?)` — read-only static-file root for `srv.static` (safe by default: no traversal/dotfiles/listing).
+- `static_dir(root, index?, spa?, cache_control?)` — read-only static-file root for `srv.static`; mounts require an existing directory under the server's captured working directory by default (no traversal/dotfiles/listing).
 - `redirect(location, status?)` — redirect response.
 - `error_response(status, message?)` — error response.
 - `api_key_auth(keys?, header?, query_param?)` — API-key authenticator.
@@ -130,7 +130,10 @@ The module's options (`host`, `port`, `read_timeout`, `write_timeout`,
 per-option `get_<key>` / `set_<key>` accessor builtins, and serve as defaults for
 the servers the module creates. Two opt-in levers default to off: `allow_public_bind`
 lets the host expose a server beyond loopback, and `allow_unsafe_file_paths` lets
-`file_response`/`send_file` serve files outside the working directory. Both
+file responses and static mounts use paths outside the server's captured working
+directory. Relative file responses remain anchored there even if the process
+changes directory later. Static mounts bind to a resolved directory at mount
+time; changing its original symlink alias cannot redirect the mount. Both
 `allow_unsafe_file_paths` and `max_body_size` are **host-only** (no `set_<key>`
 builtin) — an untrusted script cannot weaken these safety guards; set them via
 Go config or `WEB_*`. See the

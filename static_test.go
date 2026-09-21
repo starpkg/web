@@ -7,6 +7,7 @@ package web
 //   - conditional GET (304) and Range (206) via http.ServeContent
 //   - SPA fallback (opt-in) and prefix-mount + explicit-route precedence
 //   - static_dir() / static() argument validation
+//   - host root authorization and root/symlink lifecycle
 
 import (
 	"fmt"
@@ -53,7 +54,11 @@ func setupSite(t *testing.T) string {
 
 func newStaticServer(t *testing.T) *Server {
 	t.Helper()
-	return newServer(NewModule(), "localhost", 8080)
+	srv := newServer(NewModule(), "localhost", 8080)
+	// Serving-mechanics fixtures live outside cwd. Root authorization itself is
+	// covered below using newServer with the default confined policy.
+	srv.allowUnsafeFilePaths = true
+	return srv
 }
 
 func staticDirFor(root string, spa bool) *StaticDir {
@@ -374,5 +379,139 @@ func TestStaticDirBuiltinValidation(t *testing.T) {
 	if _, err := starlark.Call(th, stat.(*starlark.Builtin),
 		starlark.Tuple{starlark.String("/"), starlark.String("not-a-dir")}, nil); err == nil {
 		t.Error("static() with a non-StaticDir should error")
+	}
+}
+
+// --- Host root authorization and lifecycle -----------------------------------
+
+// useWorkingDir is intentionally serial: changing cwd is process-wide.
+func useWorkingDir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := os.Chdir(old); err != nil {
+			t.Error(err)
+		}
+	})
+}
+
+func TestStaticMountRootPolicy(t *testing.T) {
+	base := t.TempDir()
+	root := filepath.Join(base, "app")
+	outside := filepath.Join(base, "app-sibling")
+	for _, dir := range []string{root, outside} {
+		if err := os.MkdirAll(filepath.Join(dir, "assets"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "file.txt"), []byte("fixture"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useWorkingDir(t, root)
+	t.Setenv("WEB_ALLOW_UNSAFE_FILE_PATHS", "false")
+	for _, unsafe := range []bool{false, true} {
+		for _, tc := range []struct {
+			name, path     string
+			inside, exists bool
+		}{
+			{"relative_root", ".", true, true},
+			{"relative_child", "assets", true, true},
+			{"absolute_root", root, true, true},
+			{"absolute_child", filepath.Join(root, "assets"), true, true},
+			{"parent", "..", false, true},
+			{"sibling_prefix", outside, false, true},
+			{"relative_sibling", filepath.Join("..", "app-sibling"), false, true},
+			{"missing", "missing", true, false},
+			{"file_not_directory", "file.txt", true, false},
+		} {
+			t.Run(fmt.Sprintf("unsafe=%v/%s", unsafe, tc.name), func(t *testing.T) {
+				m := NewModule()
+				srv := newServer(m, "localhost", 0)
+				srv.allowUnsafeFilePaths = unsafe // explicit host opt-out
+				bi := starlark.NewBuiltin("web.static_dir", m.staticDir)
+				value, err := starlark.Call(&starlark.Thread{}, bi, starlark.Tuple{starlark.String(tc.path)}, nil)
+				if err != nil {
+					t.Fatal(err)
+				}
+				mount, err := NewServerWrapper(srv).Attr("static")
+				if err != nil {
+					t.Fatal(err)
+				}
+				_, err = starlark.Call(&starlark.Thread{}, mount, starlark.Tuple{starlark.String("/"), value}, nil)
+				wantAllowed := tc.exists && (unsafe || tc.inside)
+				if (err == nil) != wantAllowed {
+					t.Errorf("mount %q: err=%v, allowed=%v", tc.path, err, wantAllowed)
+				}
+				if !wantAllowed && len(srv.staticMounts) != 0 {
+					t.Error("rejected root must not enter the mount registry")
+				}
+			})
+		}
+	}
+	for _, sd := range []*StaticDir{nil, {}} {
+		if err := newServer(NewModule(), "localhost", 0).RegisterStatic("/", sd); err == nil {
+			t.Error("an invalid handle must not authorize a root")
+		}
+	}
+}
+
+func TestStaticMountSymlinkLifecycle(t *testing.T) {
+	root := t.TempDir()
+	outside := setupSite(t)
+	inside := filepath.Join(root, "site")
+	if err := os.Mkdir(inside, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(inside, "index.html"), []byte("inside"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	useWorkingDir(t, root)
+	t.Setenv("WEB_ALLOW_UNSAFE_FILE_PATHS", "false")
+	link := filepath.Join(root, "alias")
+	if err := os.Symlink(inside, link); err != nil {
+		t.Skipf("symlinks unsupported: %v", err)
+	}
+	srv := newServer(NewModule(), "localhost", 0)
+	handle := staticDirFor(link, false)
+	if err := srv.RegisterStatic("/", handle); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Remove(link); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, link); err != nil {
+		t.Fatal(err)
+	}
+	// The accepted root is frozen, so retargeting its alias does not switch it.
+	if r := do(srv, "GET", "/", nil); r.Code != 200 || r.Body.String() != "inside" {
+		t.Errorf("frozen mount: code=%d body=%q", r.Code, r.Body.String())
+	}
+	// A handle built before the alias changed must be checked again on mount.
+	other := newServer(NewModule(), "localhost", 0)
+	if err := other.RegisterStatic("/", handle); err == nil {
+		t.Error("retargeted outside root accepted")
+	}
+	if err := other.RegisterStatic("/", staticDirFor(link, false)); err == nil {
+		t.Error("outside symlink root accepted")
+	}
+	other.allowUnsafeFilePaths = true
+	if err := other.RegisterStatic("/", staticDirFor(link, false)); err != nil {
+		t.Errorf("host opt-out rejected outside root: %v", err)
+	}
+	// Replacing the physical root itself must not grant the replacement target.
+	if err := os.Rename(inside, inside+"-saved"); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(outside, inside); err != nil {
+		t.Fatal(err)
+	}
+	if r := do(srv, "GET", "/about.html", nil); r.Code != http.StatusNotFound {
+		t.Errorf("replaced physical root served: %d %q", r.Code, r.Body.String())
 	}
 }
