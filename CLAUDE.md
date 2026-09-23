@@ -35,13 +35,13 @@ gofmt -l . && go vet ./...                 # must be clean before commit
 go run github.com/1set/meta/doccov@master .  # doc-coverage gate (exit 0 required)
 ```
 
-**Verify on the go floor in Docker** — this repo's floor is **go 1.19** (see
+**Verify on the go floor in Docker** — this repo's floor is **go 1.25.0** (see
 Release discipline), and the pinned `go.starlark.net` baseline uses
 `maphash.String` (needs ≥1.19), so behavior on the floor must be checked in a
 container, not just on the (newer) local toolchain:
 
 ```bash
-docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src golang:1.19 go test -race -count=1 ./...
+docker run --rm -v "$PWD":/src -v "$HOME/go/pkg/mod":/go/pkg/mod -w /src golang:1.25.0 go test -race -count=1 ./...
 ```
 
 Integration scripts under `../test/web/*.star` live in the **private
@@ -172,13 +172,7 @@ Three layers must stay in sync (enforced by the doc standard,
 
 ## Release discipline
 
-- **Floor = go 1.19** (`go.mod`), matching the pinned `go.starlark.net` baseline
-  (`ffb3f39…`) and the `starlet v0.2.1` / `starlight v0.2.0` / `base v0.1.0`
-  deps. A repo's floor only rises in its own isolated **pin PR**, which is the
-  *last* PR of the series — never tag before it merges.
-- **CI matrix** = `[1.19.x, 1.25.x]` via the centralized reusable workflow in
-  `1set/meta` (`.github/workflows/build.yml` pins the `go-ci.yml` SHA and sets
-  `go-floor: "1.19"` + `doc-coverage: true`). A standalone OpenSSF Scorecard
-  workflow runs separately.
+- **Floor = go 1.25.0**, required by the reviewed networking and Unicode dependencies. The interpreter remains at `ffb3f39dd27a`; its known parser recursion limitation requires host-reviewed source or an external isolation boundary. Production builds use a supported patched Go toolchain.
+- **CI matrix** = `[1.25.x, 1.27.x]` via the pinned reusable workflow in `1set/meta`.
 - **Bumping the version, the go floor, or tagging are user-confirmed actions** —
   never tag autonomously; default to patch bumps; published tags are immutable.

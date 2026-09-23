@@ -143,3 +143,17 @@ option table, defaults, accessors, and the bind-guardrail details.
 ## License
 
 This project is licensed under the MIT License — see the [LICENSE](LICENSE) file for details.
+
+## Go compatibility
+
+Go 1.25.0 or newer is required. Production builds use Go 1.27.1. This patch retains the established Starlark interpreter pin and updates the reviewed networking/Unicode dependencies.
+
+### Dependency compatibility
+
+The Go 1.25.0 floor comes from the networking and Unicode fixes (`x/net` and
+`x/text`), independently of the Starlark pin. Production applications should
+use a supported patched Go toolchain. `x/crypto v0.55.0` keeps Go 1.25
+compatibility; this module imports its SHA-3 package, not SSH or OpenPGP. Those
+unused packages retain advisories, and CI rejects their introduction until a
+separate dependency and compatibility review. This is not a claim that the
+entire dependency module is free of vulnerabilities.
