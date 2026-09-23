@@ -99,7 +99,11 @@ back. Every script-visible thing is a Go struct exposed through a thin
   `fs.ValidPath` (the barrier that confines traversal, also satisfies CodeQL's
   path-injection query) + dotfile/`@eaDir` rejection (`.well-known` carve-out) +
   an `EvalSymlinks` real-path check (`openWithin`) that blocks symlink escape.
-  Mount registry is copy-on-write so the serve path reads it lock-free. Tests in
+  Mount roots must exist and be beneath the server's captured working directory
+  unless the host enables `allow_unsafe_file_paths`. Registration resolves and
+  copies each root; later cwd changes or symlink retargeting cannot select a
+  different root. Mount registry is copy-on-write so the serve path reads it
+  lock-free. Tests in
   `static_test.go` (source-shaped).
 - **`errors.go`** — `ErrorResponse`, `ErrorHandlerRegistry` (status code →
   Starlark handler), invoked from `applyResponse`/`NoRoute`/`NoMethod`.
@@ -109,7 +113,8 @@ back. Every script-visible thing is a Go struct exposed through a thin
 
 ## Invariants / hardening (preserve when editing)
 
-The iron rule is **opt-in / default-off so old scripts run identically**.
+Preserve documented defaults; security boundary corrections must explicitly
+document their behavior changes.
 
 1. **Default-deny public bind.** `create_server` defaults `host` to `localhost`;
    `Start()`/`Run()` call `checkBindAllowed`, which refuses any non-loopback
@@ -133,8 +138,10 @@ The iron rule is **opt-in / default-off so old scripts run identically**.
    into `bodyData` so `body()`/`json()`/`form()`/middleware can all read it;
    `form()` re-wraps the cached bytes. Don't re-read `c.Request.Body` directly.
 6. **Backward compatibility.** `NewModule()` keeps every historical default
-   (localhost bind allowed, public bind denied, 32 MiB body cap). Any new safety
-   lever must default to the historical behavior.
+   (localhost bind allowed, public bind denied, 32 MiB body cap). File responses
+   and static mounts share a fixed host root captured at server
+   creation. Outside static roots now require the existing host-only
+   `allow_unsafe_file_paths` opt-out; missing roots must be created before mounting.
 
 ## Test organization
 

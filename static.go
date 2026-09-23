@@ -148,12 +148,35 @@ func (mt *staticMount) matchPrefix(urlPath string) (string, bool) {
 }
 
 // RegisterStatic mounts a StaticDir at prefix. Most-specific (longest) prefix
-// wins when several mounts overlap.
+// wins when several mounts overlap. The root must be an existing directory
+// beneath the physical working directory captured at server creation, unless
+// the host enabled allow_unsafe_file_paths. Its resolved path is fixed at mount
+// time, so a later cwd change or retargeting of the original alias cannot grant
+// access to a different directory.
 func (s *Server) RegisterStatic(prefix string, sd *StaticDir) error {
 	if sd == nil {
 		return fmt.Errorf("static: dir must not be nil")
 	}
-	mt := &staticMount{prefix: normalizeStaticPrefix(prefix), sd: sd}
+	if sd.rootAbs == "" {
+		return fmt.Errorf("static: root must not be empty")
+	}
+	real, err := filepath.EvalSymlinks(sd.rootAbs)
+	if err != nil {
+		return fmt.Errorf("static: cannot resolve root: %w", err)
+	}
+	if !s.allowUnsafeFilePaths && (s.fileRoot == "" || !withinRoot(s.fileRoot, real)) {
+		return fmt.Errorf("static: root is outside the server's working directory")
+	}
+	if info, err := os.Stat(real); err != nil || !info.IsDir() {
+		return fmt.Errorf("static: root must be an existing directory")
+	}
+	// Bind an immutable mount copy to the checked physical directory, not to
+	// the caller's handle or its possibly mutable symlink alias.
+	bound := *sd
+	bound.rootAbs, bound.realRoot = real, real
+	bound.fsys = os.DirFS(real)
+	bound.index = append([]string(nil), sd.index...)
+	mt := &staticMount{prefix: normalizeStaticPrefix(prefix), sd: &bound}
 	s.mu.Lock()
 	// Copy-on-write: build a fresh slice rather than appending/sorting in place,
 	// so the lock-free iteration in tryServeStatic (which copies only the slice

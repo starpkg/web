@@ -10,6 +10,7 @@ package web
 //   - server builtin arg validation: route / error_handler / use_for / group errors
 //   - lifecycle errors: stop()/double-start guards
 //   - wrapHandler + applyResponse: request->handler->response bridge via httptest
+//   - file responses: complete entrypoint contract and fixed host root
 
 import (
 	"net"
@@ -656,5 +657,102 @@ def handler(req):
 	}
 	if rec.Body.String() != "custom not found" {
 		t.Errorf("body = %q, want the custom error handler body", rec.Body.String())
+	}
+}
+
+// TestServerFileRootSnapshot exercises the complete response path after cwd
+// changes, including a file returned by a custom error handler.
+func TestServerFileRootSnapshot(t *testing.T) {
+	root, outside := t.TempDir(), t.TempDir()
+	for dir, content := range map[string]string{root: "inside", outside: "outside"} {
+		if err := os.WriteFile(filepath.Join(dir, "probe.txt"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	useWorkingDir(t, root)
+	t.Setenv("WEB_ALLOW_UNSAFE_FILE_PATHS", "false")
+	m := NewModule()
+	srv := newServer(m, "localhost", 0)
+	if err := os.Chdir(outside); err != nil {
+		t.Fatal(err)
+	}
+	if err := srv.RegisterStatic("/", staticDirFor(outside, false)); err == nil {
+		t.Error("cwd change widened static root authorization")
+	}
+	paths := []string{"probe.txt", filepath.Join(root, "probe.txt"), filepath.Join(outside, "probe.txt")}
+	if volume := filepath.VolumeName(root); volume != "" {
+		paths = append(paths, volume+"probe.txt")
+	}
+	for _, entry := range []string{"file_response", "send_file", "file_path", "error_handler"} {
+		for _, path := range paths {
+			t.Run(entry+"/"+path, func(t *testing.T) {
+				response := &Response{StatusCode: 200, FilePath: path}
+				if entry == "file_response" || entry == "send_file" {
+					fn := m.fileResponse
+					if entry == "send_file" {
+						fn = m.sendFile
+					}
+					v, err := starlark.Call(&starlark.Thread{}, starlark.NewBuiltin(entry, fn), starlark.Tuple{starlark.String(path)}, nil)
+					if err != nil {
+						t.Fatal(err)
+					}
+					response = v.(*ResponseWrapper).response
+				}
+				if entry == "error_handler" {
+					globals, err := starlark.ExecFile(&starlark.Thread{}, "error.star", "def handler(req):\n    return response\n", starlark.StringDict{"response": NewResponseWrapper(response)})
+					if err != nil {
+						t.Fatal(err)
+					}
+					srv.errorHandlers.RegisterHandler([]int{404}, globals["handler"].(starlark.Callable))
+					response = &Response{StatusCode: 404}
+				}
+				c, rec := newGinContextForTest(http.MethodGet, "/probe")
+				srv.applyResponse(c, response)
+				if path == filepath.Join(outside, "probe.txt") || (filepath.VolumeName(path) != "" && !filepath.IsAbs(path)) {
+					if rec.Code != http.StatusNotFound || strings.Contains(rec.Body.String(), "outside") {
+						t.Errorf("outside file served: %d %q", rec.Code, rec.Body.String())
+					}
+				} else if rec.Code != 200 || rec.Body.String() != "inside" {
+					t.Errorf("fixed root response: %d %q", rec.Code, rec.Body.String())
+				}
+			})
+		}
+	}
+}
+
+func TestServerMissingFileRootDeniesAccess(t *testing.T) {
+	srv := newServer(NewModule(), "localhost", 0)
+	srv.fileRoot = "" // cwd resolution failed at construction
+	if _, ok := srv.resolveConfinedFile("go.mod"); ok {
+		t.Error("missing host root must deny file responses")
+	}
+	if err := srv.RegisterStatic("/", staticDirFor(".", false)); err == nil {
+		t.Error("missing host root must deny static mounts")
+	}
+}
+
+func TestServerUnavailableWorkingDirectory(t *testing.T) {
+	root := t.TempDir()
+	useWorkingDir(t, root)
+	if err := os.Remove(root); err != nil {
+		t.Skipf("platform cannot remove current directory: %v", err)
+	}
+	srv := newServer(NewModule(), "localhost", 0)
+	if srv.fileRoot != "" {
+		t.Errorf("unavailable cwd yielded a file grant: %q", srv.fileRoot)
+	}
+}
+
+func BenchmarkConfinedFileResponse(b *testing.B) {
+	srv := newServer(NewModule(), "localhost", 0)
+	response := &Response{StatusCode: 200, FilePath: "go.mod"}
+	b.ReportAllocs()
+	b.ResetTimer()
+	for i := 0; i < b.N; i++ {
+		c, rec := newGinContextForTest(http.MethodGet, "/f")
+		srv.applyResponse(c, response)
+		if rec.Code != 200 {
+			b.Fatalf("status = %d", rec.Code)
+		}
 	}
 }

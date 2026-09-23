@@ -32,7 +32,7 @@ const (
 	configKeyAllowPublicBind = "allow_public_bind"
 	// configKeyAllowUnsafeFilePaths gates serving a file whose path escapes the
 	// working directory (an absolute host path or a traversal). It defaults to
-	// false so file_response/send_file confine reads to the app directory unless
+	// false so file responses and static mounts stay under the app directory unless
 	// the host explicitly opts in.
 	configKeyAllowUnsafeFilePaths = "allow_unsafe_file_paths"
 )
@@ -63,7 +63,7 @@ func NewModule() *Module {
 		genConfigOption(configKeyServerHeader, "Custom server header", "Starlark-Web/1.0"),
 		genConfigOption(configKeyAllowPublicBind, "Allow binding to a non-loopback (public) address", false),
 		// Host-only: a script must not be able to lift its own file-path confinement.
-		genConfigOption(configKeyAllowUnsafeFilePaths, "Allow file_response/send_file to serve paths outside the working directory", false).SetHostOnly(true),
+		genConfigOption(configKeyAllowUnsafeFilePaths, "Allow file responses and static mounts outside the server working directory", false).SetHostOnly(true),
 	)
 }
 

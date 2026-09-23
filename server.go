@@ -54,7 +54,8 @@ type Server struct {
 	maxBodySize          int64
 	serverHeader         string
 	allowPublicBind      bool          // When false, refuse to bind to a non-loopback address
-	allowUnsafeFilePaths bool          // When false, confine file_response/send_file to the working directory
+	allowUnsafeFilePaths bool          // Host opt-out from the fileRoot boundary
+	fileRoot             string        // Physical working directory captured at server creation; empty denies file access
 	middleware           []*Middleware // All middleware with path patterns
 	errorHandlers        *ErrorHandlerRegistry
 	ginMiddlewareAdded   bool           // Flag to prevent multiple Gin middleware additions
@@ -78,6 +79,7 @@ func newServer(module *Module, host string, port int) *Server {
 	serverHeader := module.ext.GetString(configKeyServerHeader)
 	allowPublicBind := module.ext.GetBool(configKeyAllowPublicBind)
 	allowUnsafeFilePaths := module.ext.GetBool(configKeyAllowUnsafeFilePaths)
+	fileRoot, _ := workingDirReal()
 
 	// Set gin mode - ensure release mode by default to avoid debug output
 	if debugMode {
@@ -114,6 +116,7 @@ func newServer(module *Module, host string, port int) *Server {
 		serverHeader:         serverHeader,
 		allowPublicBind:      allowPublicBind,
 		allowUnsafeFilePaths: allowUnsafeFilePaths,
+		fileRoot:             fileRoot,
 		middleware:           make([]*Middleware, 0),
 		errorHandlers:        NewErrorHandlerRegistry(),
 		ginMiddlewareAdded:   false,
@@ -498,14 +501,11 @@ func (s *Server) applyResponse(c *gin.Context, response *Response) {
 
 // serveConfinedFile serves a path a script asked to return (via file_response /
 // send_file / a directly-set Response.file_path). Unless allow_unsafe_file_paths
-// is set, it opens the file first and then validates the open descriptor: it
-// must be a regular file — never a directory, which http.ServeFile would turn
-// into an index page or listing, nor a FIFO/device that could block — whose real
-// path stays under the process working directory. It is then served from that
-// same descriptor, which narrows the check-to-serve TOCTOU window and stops an
-// untrusted script from reading arbitrary host files or echoing a request
-// parameter straight into a file read. (Static mounts have their own confinement
-// in static.go.) Returns true when it wrote a response.
+// is set, it resolves and checks the path before opening: only regular files
+// under the physical working directory captured at server creation are allowed.
+// Directories and special files are rejected, and the opened descriptor is used
+// for serving. Static mounts use the same host root in static.go. Returns true
+// when it wrote a response.
 func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 	if s.allowUnsafeFilePaths {
 		c.File(p) // opt-out: unrestricted serving (historical behavior)
@@ -531,24 +531,22 @@ func (s *Server) serveConfinedFile(c *gin.Context, p string) bool {
 }
 
 // resolveConfinedFile resolves p to a symlink-free physical path, confirms it is
-// a regular file under the working directory, and returns it. Resolving and
-// checking BEFORE any open means an outside target is never opened — so a
+// a regular file under the server's captured working directory, and returns it.
+// Resolving and checking BEFORE any open means an outside target is never opened — so a
 // FIFO/device outside the root cannot block os.Open — and a directory (which
 // http.ServeFile would list) is rejected.
 func (s *Server) resolveConfinedFile(p string) (string, bool) {
-	if strings.TrimSpace(p) == "" {
+	if strings.TrimSpace(p) == "" || s.fileRoot == "" {
 		return "", false
 	}
-	abs, err := filepath.Abs(p)
+	if !filepath.IsAbs(p) {
+		p = filepath.Join(s.fileRoot, p)
+	}
+	real, err := filepath.EvalSymlinks(p)
 	if err != nil {
 		return "", false
 	}
-	real, err := filepath.EvalSymlinks(abs)
-	if err != nil {
-		return "", false
-	}
-	realRoot, ok := workingDirReal()
-	if !ok || !withinRoot(realRoot, real) {
+	if !withinRoot(s.fileRoot, real) {
 		return "", false
 	}
 	// real is symlink-free, so Lstat == Stat: reject a directory or FIFO/device.
@@ -559,15 +557,12 @@ func (s *Server) resolveConfinedFile(p string) (string, bool) {
 }
 
 // workingDirReal returns the symlink-resolved process working directory.
-func workingDirReal() (string, bool) {
+func workingDirReal() (string, error) {
 	root, err := os.Getwd()
 	if err != nil {
-		return "", false
+		return "", err
 	}
-	if rr, err := filepath.EvalSymlinks(root); err == nil {
-		return rr, true
-	}
-	return root, true
+	return filepath.EvalSymlinks(root)
 }
 
 // Server lifecycle methods
