@@ -143,7 +143,7 @@ This project is licensed under the MIT License — see the [LICENSE](LICENSE) fi
 
 ## Go compatibility
 
-Go 1.25.0 or newer is required. Release builds use Go 1.27.1. This patch updates the interpreter and the reviewed networking/Unicode security dependencies.
+Go 1.25.0 or newer is required. Production builds use Go 1.27.1. This patch retains the established Starlark interpreter pin and updates the reviewed networking/Unicode dependencies.
 
 ### Dependency compatibility
 
