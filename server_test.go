@@ -8,7 +8,7 @@ package web
 //   - Start() bind errors: a failed listen must surface, not be swallowed
 //   - create_server argument validation: port range / invalid port / header override
 //   - server builtin arg validation: route / error_handler / use_for / group errors
-//   - lifecycle errors: stop()/double-start guards
+//   - lifecycle: script start()/stop() on an OS-assigned port; error guards
 //   - wrapHandler + applyResponse: request->handler->response bridge via httptest
 //   - file responses: complete entrypoint contract and fixed host root
 
@@ -22,6 +22,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/1set/starlet"
 	"github.com/gin-gonic/gin"
 	"go.starlark.net/starlark"
 )
@@ -371,7 +372,37 @@ func TestServerGroupBuiltin(t *testing.T) {
 	}
 }
 
-// --- lifecycle errors --------------------------------------------------------
+// --- lifecycle ---------------------------------------------------------------
+
+// Exercise the real script-facing lifecycle on an OS-assigned loopback port.
+// The configuration example stays free of fixed-port side effects, and this
+// test retains successful wrapper coverage even across concurrent test runs.
+func TestServerScriptLifecycle(t *testing.T) {
+	srv := newServer(NewModule(), "127.0.0.1", 0)
+	defer func() {
+		if srv.IsRunning() {
+			if err := srv.Stop(); err != nil {
+				t.Errorf("cleanup Stop(): %v", err)
+			}
+		}
+	}()
+	machine := starlet.NewWithGlobals(starlet.StringAnyMap{"server": NewServerWrapper(srv)})
+	_, err := machine.RunScript([]byte(`
+def check():
+    if server.is_running():
+        fail("server unexpectedly running before start")
+    server.start()
+    if not server.is_running():
+        fail("server not running after start")
+    server.stop()
+    if server.is_running():
+        fail("server still running after stop")
+check()
+`), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
 
 func TestServerLifecycleGuards(t *testing.T) {
 	t.Run("stop_when_not_running_errors", func(t *testing.T) {
