@@ -46,16 +46,9 @@ def main():
     # Register routes
     srv.get("/", home)
     srv.get("/api/info", api_info)
-    
+
+    # This example configures routes without binding a shared test port.
     print("Server created successfully")
-    
-    # Start server
-    srv.start()
-    
-    # TODO: make something calling via http package to verify the response
-    
-    # Stop server
-    srv.stop()
 
 main()
 `

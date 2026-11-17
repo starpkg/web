@@ -3,10 +3,10 @@ module github.com/starpkg/web
 go 1.25.0
 
 require (
-	github.com/1set/starlet v0.2.3
-	github.com/1set/starlight v0.2.1
+	github.com/1set/starlet v0.2.5
+	github.com/1set/starlight v0.2.3
 	github.com/gin-gonic/gin v1.9.1
-	github.com/starpkg/base v0.1.3
+	github.com/starpkg/base v0.1.4
 	go.starlark.net v0.0.0-20260324133313-ffb3f39dd27a
 )
 

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## What this is
 
-`starpkg/web` is an **L4 domain module** of the Star\* ecosystem: it lets a
+`starpkg/web` is an **L3 domain module** of the Star\* ecosystem: it lets a
 Starlark script stand up an HTTP **server** with a Flask-inspired API — routes,
 route groups, path-pattern middleware, request/response helpers, pluggable
 authentication, and custom error handlers — built on
@@ -21,7 +21,7 @@ Layer position: depends downward on `starpkg/base` (the module/config system),
 `1set/starlet` (the Machine + `dataconv` for Go⇄Starlark JSON/value marshalling),
 `1set/starlight` (`convert.FromValue` for handler-result fallback conversion),
 and transitively `go.starlark.net`. Plus the third-party `gin` HTTP framework.
-Nothing in the ecosystem depends on it.
+StarCLI registers this module; it does not depend upward on StarCLI.
 
 ## Dev commands
 
